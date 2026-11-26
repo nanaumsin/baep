@@ -1,12 +1,11 @@
-/* 배프 Firebase 설정
-   받은 압축파일에는 이 파일이 없었어요. 그래서 지금은 데이터가 각 휴대폰 안(localStorage)에만 저장돼요.
-   깃허브에 올린 버전처럼 여러 폰이 같은 데이터를 보게 하려면,
-   원래 쓰던 firebase-config.js 내용으로 이 파일을 통째로 바꿔 주세요. 예:
-
-   window.FIREBASE_CONFIG = {
-     apiKey: '...',
-     authDomain: '...firebaseapp.com',
-     projectId: '...',
-     appId: '...'
-   };
-*/
+/* 배프 Firebase 설정 (프로젝트: baep-f3465, Firestore 위치: 서울 asia-northeast3)
+   이 값들은 원래 웹 앱 코드에 들어가는 공개용 값이라 깃허브에 올려도 괜찮아요.
+   실제로 데이터를 지키는 건 Firestore 보안 규칙(server/firestore.rules)이에요. */
+window.FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCz3oIdCNZFXZ878qOBwhSS0jr2p-CmWpY",
+  authDomain: "baep-f3465.firebaseapp.com",
+  projectId: "baep-f3465",
+  storageBucket: "baep-f3465.firebasestorage.app",
+  messagingSenderId: "1080202728622",
+  appId: "1:1080202728622:web:aba857e78f77d0a8db893f"
+};
