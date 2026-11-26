@@ -22,6 +22,11 @@ android {
         }
     }
 
+    // 운영자 화면(admin.html)은 앱에 넣지 않아요. (aapt 기본 제외 목록 + admin.html)
+    androidResources {
+        ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:<dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~:!admin.html'
+    }
+
     buildTypes {
         release {
             minifyEnabled false

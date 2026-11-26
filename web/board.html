@@ -1,4 +1,4 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body><script>window.__BOARD=1</script>
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style><script src="app-config.js"></script><script src="firebase-config.js"></script><script src="payment-config.js"></script><script src="auth-config.js"></script></head><body><script>window.__BOARD=1</script>
 <title>배프 · 전체 화면 보기</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jua&family=Noto+Sans+KR:wght@400;500;700;800&display=swap">
@@ -829,59 +829,221 @@ const TUTORS=[
   days:[7,8,14,15,21,22],slots:['10:00','15:00'],full:{},revs:[['오○순 배움님','친절해요.','10월 12일']]}
 ];
 const VT=()=>Object.entries(TOPICS).filter(([,t])=>!t.hide);
-const ACCOUNTS={baeum:{pw:'1234',role:'mentee',demo:true},friend:{pw:'1234',role:'mentor',demo:true},admin:{pw:'1234',role:'admin'}};
-/* 가입 계정 저장소 (아티팩트 데이터베이스 · baep_accounts/<아이디>) */
-let _dbp=null;
-let getDB=()=>{if(!_dbp)_dbp=(async()=>{try{if(!window.claude||!window.claude.use)return null;return await window.claude.use('db')}catch(e){return null}})();return Promise.race([_dbp,new Promise(r=>setTimeout(()=>r(null),6000))])};
-setTimeout(getDB,0);
-const accRef=(db,id)=>db.doc('baep_accounts/'+id);
-async function findAcct(id){if(ACCOUNTS[id])return ACCOUNTS[id];const db=await getDB();if(!db)return null;
- for(let t=0;t<2;t++){try{const sn=await accRef(db,id).get();if(sn.exists){const a=JSON.parse(JSON.stringify(sn.data()));ACCOUNTS[id]=a;return a}return null}catch(e){if(!e||e.code!=='unavailable')return null;await new Promise(r=>setTimeout(r,500+Math.random()*500))}}return null}
-async function saveAcct(id,a){ACCOUNTS[id]=a;const db=await getDB();if(!db)return false;
- for(let t=0;t<2;t++){try{await accRef(db,id).set(JSON.parse(JSON.stringify(a)));return true}catch(e){if(!e||e.code!=='unavailable')return false;await new Promise(r=>setTimeout(r,500+Math.random()*500))}}return false}
-async function syncApps(){const db=await getDB();if(!db)return;try{const q=await db.collection('baep_accounts').where('role','==','mentor').where('approved','==',false).get();let n=0;
- q.docs.forEach(d=>{const a=d.data()||{};const u=a.tu||{};if(S.ad.apps.some(x=>x.acct===d.id))return;n++;
-  S.ad.apps.unshift({id:'acc-'+d.id,acct:d.id,name:u.name||d.id,school:u.school||'',major:(u.major||'')+' '+(u.grade||''),age:u.age||'',gender:u.gender||'',dong:u.dong||'영통동',addr:u.road||u.dong||'',rad:u.rad||3,date:a.date||'',crime:!!u.crime,doc:'',st:'대기',me:true})});
- if(n&&S.screen==='admin')render()}catch(e){}}
+TUTORS.forEach(t=>{t.fake=true});   /* 시연용 프렌드: 'live' 모드에서는 목록에 안 보여요 */
+/* ===================== 앱 모드 · 로그인 · 저장소 (v2 보안 구조, docs/ARCH-v2.md) =====================
+   - 비밀번호 확인·가입·결제 승인·운영자 권한은 모두 서버(워커)가 해요. 앱은 서버가 준 Firebase custom token 으로만 로그인해요.
+   - 시연 계정(baeum / friend / admin, 1234)은 BAEP_MODE 'demo' 에서만 있고, 이 기기 안에서만 움직여요 (Firestore·서버 안 씀).
+   - Firestore 는 "내 것만" 읽고 써요. 규칙: server/firestore.rules */
+const DEMO_MODE=window.BAEP_MODE!=='live';
+const APP_Q=new URLSearchParams(location.search);
+const PAGE_MODE=APP_Q.has('s')?'frame':(window.__BOARD?'board':'app');
+const IN_ANDROID=/BaepApp/.test(navigator.userAgent||'');
+const ADMIN_APP=PAGE_MODE==='app'&&!window.__KIOSK&&APP_Q.get('app')==='admin'&&!IN_ANDROID;   // 운영자 화면(admin.html → index.html?app=admin). 안드로이드 앱에서는 절대 안 열려요
+const FB_CFG=window.FIREBASE_CONFIG&&window.FIREBASE_CONFIG.projectId?window.FIREBASE_CONFIG:null;
+const WORKER=String((window.BAEP_AUTH||{}).workerUrl||'').trim().replace(/\/+$/,'');
+const NET=PAGE_MODE==='app'&&!window.__KIOSK&&!!FB_CFG;           // Firebase·서버를 쓰는 실제 앱 화면일 때만
+const ACCOUNTS=DEMO_MODE?{baeum:{pw:'1234',role:'mentee',demo:true},friend:{pw:'1234',role:'mentor',demo:true},admin:{pw:'1234',role:'admin',demo:true}}:{};
+const DEMO_IDS=['baeum','friend','admin','baeum01','fr01'];
+const RESERVED_IDS=['admin','baeum','friend','demo','baep','root','system','test','baeum01','fr01'];   /* 서버도 막아요 */
+const isDemoAcct=id=>!!(id&&ACCOUNTS[id]&&ACCOUNTS[id].demo);
+/* 서버가 확인해 준 로그인 (ID 토큰 claims: acct·role·provider). 신원은 이것만 믿어요 (localStorage 는 믿지 않아요) */
+const SES={acct:null,role:null,uid:null,provider:null};
+const live=()=>NET&&!!SES.acct&&typeof S!=='undefined'&&S.me===SES.acct&&!isDemoAcct(S.me);
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const within=(p,ms,v=null)=>Promise.race([p,sleep(ms).then(()=>v)]);
+const lsg=k=>{if(PAGE_MODE==='frame')return null;try{return localStorage.getItem(k)}catch(e){return null}};
+const lss=(k,v)=>{if(PAGE_MODE==='frame')return true;try{localStorage.setItem(k,v);return true}catch(e){return false}};
+const lsd=k=>{try{localStorage.removeItem(k)}catch(e){}};
+/* 다른 사람이 쓴 글(이름·소개·메모 등)을 화면에 그릴 때 HTML 로 해석되지 않게, 받아올 때 위험한 글자를 비슷한 글자로 바꿔요 */
+const SAFE=s=>String(s).replace(/[<>"'`&]/g,c=>({'<':'‹','>':'›','"':'”',"'":'’','`':'ʼ','&':'＆'}[c]));
+const safeDeep=o=>Array.isArray(o)?o.map(safeDeep):o&&typeof o==='object'?Object.fromEntries(Object.entries(o).map(([k,v])=>[k,safeDeep(v)])):typeof o==='string'?SAFE(o):o;
+const HHMM=/^\d{2}:\d{2}$/;
+const safeReq=d=>{d=safeDeep(d||{});d.dur=[60,90].includes(+d.dur)?+d.dur:60;d.day=+d.day||0;d.time=HHMM.test(d.time||'')?d.time:'10:00';
+ d.topics=(Array.isArray(d.topics)?d.topics:[]).filter(k=>typeof TOPICS!=='undefined'&&TOPICS[k]);if(!d.topics.length)d.topics=['taxi'];d.dist=+d.dist||0;d.age=+d.age||'';d.amount=+d.amount||0;return d};
+/* 예전 버전이 이 폰에 남긴 계정 사본(비밀번호 해시 포함)·간편로그인 연결 정보는 지워요 */
+try{Object.keys(localStorage).forEach(k=>{if(k.startsWith('baep_social_'))lsd(k);else if(k.startsWith('baep3_acc_')){const v=lsg(k)||'';if(/"pw2?"\s*:/.test(v))lsd(k)}})}catch(e){}
+
+/* ---------- Firebase (app · firestore · auth compat) ---------- */
+const FB_V='10.12.2';
+const loadJs=src=>new Promise((ok,no)=>{const t=document.createElement('script');t.src=src;t.onload=ok;t.onerror=()=>no(new Error('load '+src));document.head.appendChild(t)});
+let _fbP=null;
+function fbReady(){if(!NET)return Promise.resolve(null);
+ if(!_fbP)_fbP=(async()=>{try{const b=`https://www.gstatic.com/firebasejs/${FB_V}/`;
+   if(!window.firebase||!firebase.initializeApp)await loadJs(b+'firebase-app-compat.js');
+   await Promise.all([firebase.firestore?0:loadJs(b+'firebase-firestore-compat.js'),firebase.auth?0:loadJs(b+'firebase-auth-compat.js')]);
+   if(!firebase.apps.length)firebase.initializeApp(FB_CFG);
+   const au=firebase.auth();await within(new Promise(r=>{const un=au.onAuthStateChanged(()=>{un();r()})}),6000);
+   window.__BAEP_STORE='firebase';return firebase}
+  catch(e){console.warn('[배프] Firebase 연결 실패',e);_fbP=null;window.__BAEP_STORE='local';return null}})();
+ return _fbP}
+async function getDB(){const fb=await within(fbReady(),10000);return fb?fb.firestore():null}
+async function fbUser(){const fb=await within(fbReady(),10000);return fb?fb.auth().currentUser:null}
+/* 로그인 전 공개 정보(승인된 프렌드·나들이 일정) 읽기용 익명 로그인 — 필요할 때만 */
+async function pubDB(){const fb=await within(fbReady(),10000);if(!fb)return null;const au=fb.auth();
+ if(!au.currentUser){try{await within(au.signInAnonymously(),8000)}catch(e){return null}}return fb.firestore()}
+/* 내 계정(서버가 확인한 로그인)일 때만 Firestore. 시연 계정·둘러보기는 null → 이 기기 안에서만 */
+async function myDB(){return live()?await getDB():null}
+/* 서버가 준 custom token 으로 로그인하고 claims 읽기 */
+async function signInToken(token){const fb=await within(fbReady(),10000);if(!fb||!token)return null;
+ try{const au=fb.auth();await within(au.signInWithCustomToken(token),15000);const u=au.currentUser;if(!u||u.isAnonymous)return null;
+  const c=((await u.getIdTokenResult())||{}).claims||{};Object.assign(SES,{uid:u.uid,acct:c.acct||null,role:c.role||null,provider:c.provider||null});
+  return {uid:u.uid,acct:SES.acct,role:SES.role,provider:SES.provider}}
+ catch(e){console.warn('[배프] 로그인 토큰 확인 실패',e);return null}}
+/* 로그아웃: Firebase 로그아웃 → (공개 정보 읽기용) 익명 로그인 */
+async function signOutAll(anon=true){Object.assign(SES,{acct:null,role:null,uid:null,provider:null});
+ const fb=window.firebase&&firebase.apps&&firebase.apps.length&&firebase.auth?firebase:null;if(!fb)return;
+ try{await fb.auth().signOut()}catch(e){}
+ if(anon){try{await within(fb.auth().signInAnonymously(),8000)}catch(e){}}}
+
+/* ---------- 워커(서버) API ---------- */
+const AUTH_MSG={BAD_LOGIN:'아이디나 비밀번호가 맞지 않아요',LOCKED:'여러 번 틀려서 10분 동안 잠겼어요. 잠시 후 다시 해 주세요',
+ ID_TAKEN:'이미 있는 아이디예요. 다른 아이디를 적어 주세요',BAD_ID:'아이디는 영문 소문자로 시작하고, 영문 소문자·숫자 4~20자로 적어 주세요',
+ BAD_PW:'비밀번호는 6자 이상 64자 이하로 적어 주세요',BAD_ROLE:'가입 종류를 다시 골라 주세요',BAD_INPUT:'입력한 내용을 다시 확인해 주세요',
+ NET:'인터넷 연결을 확인해 주세요',AUTH_REQUIRED:'다시 로그인해 주세요',BAD_TOKEN:'다시 로그인해 주세요',NO_SERVER:'아직 서버 설정 전이에요. 운영자에게 알려 주세요',
+ PAY_IN_PROGRESS:'다른 화면에서 결제하고 있어요. 잠시 후 다시 확인해 주세요',NOT_PAYABLE:'프렌드가 수락한 뒤에 결제할 수 있어요',NOT_OWNER:'내 예약만 결제할 수 있어요',
+ BAD_AMOUNT:'결제 금액이 맞지 않아요. 처음부터 다시 해 주세요',REF_NOT_FOUND:'결제할 예약을 찾지 못했어요',DB:'잠깐 연결이 안 돼요. 잠시 뒤 다시 해 주세요'};
+const errMsg=r=>(r&&AUTH_MSG[r.code])||(r&&r.message)||'잠시 후 다시 해 주세요';
+/* o.bearer: 지금 Firebase 로그인한 사람의 ID 토큰을 붙여요 (결제 승인·탈퇴·간편로그인 가입) */
+async function api(path,body,o={}){if(!WORKER)return {ok:false,code:'NO_SERVER'};
+ const h={};if(body)h['Content-Type']='application/json';
+ if(o.bearer){const u=await fbUser();if(!u||u.isAnonymous)return {ok:false,code:'AUTH_REQUIRED'};try{h.Authorization='Bearer '+await u.getIdToken()}catch(e){return {ok:false,code:'NET'}}}
+ const ac=typeof AbortController!=='undefined'?new AbortController():null;const tm=setTimeout(()=>{try{ac&&ac.abort()}catch(e){}},20000);
+ try{const r=await fetch(WORKER+path,{method:body?'POST':'GET',headers:h,body:body?JSON.stringify(body):undefined,signal:ac?ac.signal:undefined});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok||j.ok===false)return Object.assign({},j,{ok:false,status:r.status,code:j.code||('HTTP_'+r.status)});
+  return Object.assign({},j,{ok:true})}
+ catch(e){return {ok:false,code:'NET'}}finally{clearTimeout(tm)}}
+
+/* ---------- 내 계정 문서 baep_accounts/{acct} ---------- */
+const LSA='baep3_acc_';          // 이 폰에 남기는 내 계정 사본 (비밀번호 없음 · 서버 로그인 뒤에만 씀)
+const stripPw=o=>{if(!o||typeof o!=='object')return o;const c=JSON.parse(JSON.stringify(o));delete c.pw;delete c.pw2;return c};
+const ACC_OK=['sr','tu','state'];  // 앱이 고칠 수 있는 필드 (role·approved·createdAt·ownerUids·pw 는 절대 안 보내요)
+async function loadOwnAcct(acct){if(!SES.acct||SES.acct!==acct)return null;let a=null;const db=await getDB();
+ if(db){for(let t=0;t<2&&!a;t++){try{const sn=await within(db.doc('baep_accounts/'+acct).get(),9000);if(sn&&sn.exists)a=JSON.parse(JSON.stringify(sn.data()||{}));if(sn)break}catch(e){if(!e||e.code!=='unavailable')break;await sleep(600)}}}
+ if(!a){try{a=JSON.parse(lsg(LSA+acct)||'null')}catch(e){a=null}if(a)a.cached=true}
+ if(a){a=safeDeep(a);delete a.pw;delete a.pw2;delete a.demo;if(a.sr)a.sr=stripPw(a.sr);if(a.tu)a.tu=stripPw(a.tu)}
+ return a}
+async function saveAcct(id,a){if(!a)return false;ACCOUNTS[id]=a;
+ if(a.demo||!SES.acct||id!==SES.acct)return true;                 // 시연·이 기기 계정은 메모리에만
+ const patch={};ACC_OK.forEach(k=>{if(a[k]!==undefined&&a[k]!==null)patch[k]=k==='state'?a[k]:clean({[k]:a[k]})[k]});
+ const body=JSON.parse(JSON.stringify(patch));
+ lss(LSA+id,JSON.stringify(body));
+ const db=await getDB();if(!db)return false;
+ for(let t=0;t<2;t++){try{await db.doc('baep_accounts/'+id).update(body);return true}catch(e){if(!e||e.code!=='unavailable')return false;await sleep(500+Math.random()*500)}}return false}
+/* 운영자: 승인 대기 프렌드 (baep_profiles where approved==false) */
+async function syncApps(){if(!live()||SES.role!=='admin')return;const db=await getDB();if(!db)return;
+ try{const q=await db.collection('baep_profiles').where('approved','==',false).get();let n=0;
+  for(const d of q.docs){if(S.ad.apps.some(x=>x.acct===d.id))continue;const u=safeDeep(d.data()||{});let x={};
+   try{const a=await db.doc('baep_accounts/'+d.id).get();if(a.exists){const ad=safeDeep(a.data()||{});const t=ad.tu||{};x={crime:!!t.crime,date:ad.date||'',phone:t.phone||''}}}catch(e){}
+   S.ad.apps.unshift({id:'acc-'+d.id,acct:d.id,name:u.name||d.id,school:u.school||'',major:((u.major||'')+' '+(u.grade||'')).trim(),age:u.age||'',gender:u.gender||'',dong:u.dong||'영통동',addr:u.road||u.dong||'',rad:u.rad||3,date:x.date||'',crime:!!x.crime,doc:'',st:'대기',me:true});n++}
+  if(n&&S.screen==='admin')render()}catch(e){console.warn('[배프] 승인 대기 목록을 못 읽었어요',e)}}
 /* 로그인한 계정의 진행 상태(예약·결제·수업 단계 등)를 계정에 저장 */
 const KEEP={mentee:['sr','req','booking','bphase','history','note','paid','skills','notis','sms','payer','method','tid','day','slot','place','dur','accepted','rv'],
- mentor:['tu','tc','reqs','tPast','tUp','money','tnotis']};
-const clean=o=>{const c=JSON.parse(JSON.stringify(o));if(c.sr){c.sr.pw='';c.sr.pw2=''}if(c.tu){c.tu.pw='';c.tu.pw2='';if(c.tu.photo)c.tu.photo='sample'}return c};
+ mentor:['tu','tc','reqs','tPast','tUp','money','tnotis','tDone']};
+const clean=o=>{const c=JSON.parse(JSON.stringify(o));if(c.sr){delete c.sr.pw;delete c.sr.pw2}if(c.tu){delete c.tu.pw;delete c.tu.pw2;if(c.tu.photo)c.tu.photo='sample'}return c};
 let _svT=null,_svLast='';
 function snapState(){const a=S.me&&ACCOUNTS[S.me];if(!a||a.demo||!KEEP[a.role])return null;const st={};KEEP[a.role].forEach(k=>st[k]=S[k]);return [S.me,a,clean(st)]}
 function saveState(now){const sn=snapState();if(!sn)return;const [id,a,st]=sn;const js=JSON.stringify(st);if(js===_svLast)return;
- clearTimeout(_svT);const go=()=>{_svLast=js;a.state=st;saveAcct(id,a).then(ok=>{if(!ok)_svLast=''})};if(now)go();else _svT=setTimeout(go,700)}
+ clearTimeout(_svT);const go=()=>{_svLast=js;a.state=st;if(a.role==='mentee'&&S.sr)a.sr=stripPw(S.sr);saveAcct(id,a).then(ok=>{if(!ok)_svLast=''})};if(now)go();else _svT=setTimeout(go,700)}
 function loadState(a){if(!a.state)return;const st=JSON.parse(JSON.stringify(a.state));(KEEP[a.role]||[]).forEach(k=>{if(st[k]!==undefined&&st[k]!==null&&typeof S[k]==='object'&&S[k]&&!Array.isArray(S[k])&&!Array.isArray(st[k]))S[k]=Object.assign(S[k],st[k]);else if(st[k]!==undefined)S[k]=st[k]});
  _svLast=JSON.stringify(clean((()=>{const o={};KEEP[a.role].forEach(k=>o[k]=S[k]);return o})()))}
-/* 예약 요청 공유 저장소 (baep_requests/<요청번호>) — 배움님 요청 → 프렌드 수락 → 결제 */
+
+/* ---------- 예약 요청 baep_requests/{rid} — 배움님 요청 → 프렌드 수락 → 결제(서버가 paid 기록) ----------
+   진짜 계정끼리는 Firestore, 시연(시연 계정·둘러보기·시연 프렌드)은 이 기기 안 저장소(localStorage, 같은 폰의 다른 탭에도 보여요) */
 const reqKey=tid=>tid==='t1'?'friend':((tutor(tid)||{}).acct||null);
-async function reqWrite(rid,data){const db=await getDB();if(!db)return false;try{await db.doc('baep_requests/'+rid).set(data);return true}catch(e){return false}}
-async function reqUpdate(rid,data){const db=await getDB();if(!db)return false;try{await db.doc('baep_requests/'+rid).update(data);return true}catch(e){return false}}
+const LREQ_K='baep3_demo_reqs';let _lreqMem={};const _lreqFns=new Set();
+const lreqAll=()=>{const j=lsg(LREQ_K);if(j==null)return _lreqMem;try{return JSON.parse(j)||{}}catch(e){return {}}};
+const lreqFire=()=>{const all=lreqAll();_lreqFns.forEach(f=>{try{f(all)}catch(e){console.warn(e)}})};
+function lreqPut(rid,d,merge){const all=lreqAll();all[rid]=merge?Object.assign({},all[rid]||{},d):d;
+ const ks=Object.keys(all);if(ks.length>40)ks.sort((a,b)=>(all[a].created||0)-(all[b].created||0)).slice(0,ks.length-40).forEach(k=>delete all[k]);
+ _lreqMem=all;lss(LREQ_K,JSON.stringify(all));setTimeout(lreqFire,0)}
+addEventListener('storage',e=>{if(e.key===LREQ_K)lreqFire()});
+const lreqOn=fn=>{_lreqFns.add(fn);setTimeout(()=>{if(_lreqFns.has(fn))fn(lreqAll())},0);return ()=>{_lreqFns.delete(fn)}};
+async function reqWrite(rid,data,remote){if(!remote){lreqPut(rid,data);return true}const db=await myDB();if(!db)return false;
+ try{return await within(db.doc('baep_requests/'+rid).set(data).then(()=>true),12000,false)}catch(e){console.warn('[배프] 요청 저장 실패',e);return false}}
+async function reqUpdate(rid,data,remote){if(!remote){lreqPut(rid,data,true);return true}const db=await myDB();if(!db)return false;
+ try{return await within(db.doc('baep_requests/'+rid).update(data).then(()=>true),12000,false)}catch(e){console.warn('[배프] 요청 수정 실패',e);return false}}
 let _rqUn=null,_inUn=null,_inFirst=true,_lfAt=0;
+let onLessonPaid=null,PAYING_RID=null;   // 결제 승인 뒤 '수업 확정'으로 넘기는 함수 (v3 결제 부분에서 채워요)
 function unwatchAll(){if(_rqUn){_rqUn();_rqUn=null}if(_inUn){_inUn();_inUn=null}}
-async function watchReq(){if(_rqUn){_rqUn();_rqUn=null}const r=S.req;if(!r||!r.rid)return;const db=await getDB();if(!db||!S.req||S.req.rid!==r.rid)return;
- try{_rqUn=db.doc('baep_requests/'+r.rid).onSnapshot(sn=>{if(!sn.exists||!S.req||S.req.rid!==r.rid)return;const d=sn.data()||{};
-  if(d.st==='ok'&&S.req.st==='wait')reqAccept();else if((d.st==='no'&&S.req.st==='wait')||(d.st==='cancel'&&S.req.st!=='no'))reqDecline()},()=>{})}catch(e){}}
-const friendKey=()=>{const a=S.me&&ACCOUNTS[S.me];return a&&a.role==='mentor'&&!a.demo?S.me:'friend'};
-async function watchInbox(){if(_inUn){_inUn();_inUn=null}_inFirst=true;const key=friendKey();const db=await getDB();if(!db)return;
- try{_inUn=db.collection('baep_requests').where('to','==',key).onSnapshot(q=>inbox(q.docs.map(d=>d.data()||{})),()=>{})}catch(e){}}
-function inbox(list){let ch=false;const first=_inFirst;_inFirst=false;
- const w=list.filter(d=>d.st==='wait'&&!(S.tDecl&&S.tDecl.r.rid===d.rid)&&!(S.tc&&S.tc.rid===d.rid)).sort((a,b)=>(b.created||0)-(a.created||0)).map(d=>({...d,id:'db-'+d.rid}));
+async function watchReq(){if(_rqUn){_rqUn();_rqUn=null}const r=S.req;if(!r||!r.rid)return;
+ const on=d=>{if(!d||!S.req||S.req.rid!==r.rid)return;d=safeReq(d);
+  if(r.remote&&d.paid===true){if(PAYING_RID!==r.rid&&onLessonPaid)onLessonPaid(d);return}   // 결제 상태는 서버가 쓴 문서만 믿어요
+  if(d.st==='ok'&&S.req.st==='wait')reqAccept();else if((d.st==='no'&&S.req.st==='wait')||(d.st==='cancel'&&S.req.st!=='no'))reqDecline()};
+ if(!r.remote){_rqUn=lreqOn(all=>on(all[r.rid]));return}
+ const db=await myDB();if(!db||!S.req||S.req.rid!==r.rid)return;
+ try{_rqUn=db.doc('baep_requests/'+r.rid).onSnapshot(sn=>{if(sn.exists)on(sn.data()||{})},e=>console.warn('[배프] 요청 보기 실패',e))}catch(e){}}
+async function watchInbox(){if(_inUn){_inUn();_inUn=null}_inFirst=true;
+ if(live()){if(SES.role!=='mentor')return;const db=await myDB();if(!db)return;
+  try{_inUn=db.collection('baep_requests').where('to','==',S.me).onSnapshot(q=>inbox(q.docs.map(d=>({...safeReq(d.data()),rid:d.id,remote:true}))),e=>console.warn('[배프] 받은 요청 보기 실패',e))}catch(e){}return}
+ _inUn=lreqOn(all=>inbox(Object.values(all).filter(d=>d&&d.to==='friend').map(safeReq)))}
+const isPaidReq=d=>d.remote?d.paid===true:(d.st==='paid'||d.paid===true);
+function inbox(list){let ch=false;const first=_inFirst;_inFirst=false;const done=S.tDone||[];
+ /* 열어둔 시간에 들어온 예약은 바로 수락 (프렌드 앱이 수락으로 바꿔요) */
+ list.filter(d=>d.inst&&d.st==='wait'&&!done.includes(d.rid)).forEach(d=>{d.st='ok';reqUpdate(d.rid,{st:'ok',updated:Date.now()},!!d.remote)});
+ const w=list.filter(d=>d.st==='wait'&&!done.includes(d.rid)&&!(S.tDecl&&S.tDecl.r.rid===d.rid)&&!(S.tc&&S.tc.rid===d.rid)).sort((a,b)=>(b.created||0)-(a.created||0)).map(d=>({...d,id:'db-'+d.rid}));
  const before=S.reqs.filter(r=>r.rid).map(r=>r.rid).join();
  const fresh=w.filter(d=>!S.reqs.some(r=>r.rid===d.rid));
  S.reqs=[...w,...S.reqs.filter(r=>!r.rid)];
  if(before!==w.map(d=>d.rid).join())ch=true;
  if(!first)fresh.forEach(d=>tnoti('새 수업 요청',`${d.who} 배움님이 수업을 요청했어요`));
- if(S.tc&&S.tc.rid){const d=list.find(x=>x.rid===S.tc.rid);if(d&&d.st==='paid'&&S.tc.st==='pay'){S.tc.st='conf';ch=true;tnoti('결제 완료',`${d.who} 배움님이 결제했어요. 수업이 확정됐어요`)}}
- if(!S.tc){const d=list.filter(x=>(x.st==='ok'||x.st==='paid')&&!x.fdone).sort((a,b)=>(b.updated||0)-(a.updated||0))[0];if(d){S.tc={...d,id:'db-'+d.rid,st:d.st==='paid'?'conf':'pay'};ch=true}}
+ if(S.tc&&S.tc.rid){const d=list.find(x=>x.rid===S.tc.rid);if(d&&isPaidReq(d)&&S.tc.st==='pay'){S.tc.st='conf';ch=true;tnoti('결제 완료',`${d.who} 배움님이 결제했어요. 수업이 확정됐어요`)}}
+ if(!S.tc){const d=list.filter(x=>(x.st==='ok'||isPaidReq(x))&&!x.fdone&&!done.includes(x.rid)).sort((a,b)=>(b.updated||0)-(a.updated||0))[0];if(d){S.tc={...d,id:'db-'+d.rid,st:isPaidReq(d)?'conf':'pay'};ch=true}}
  if(ch&&(TUTOR_TAB[S.screen]||S.screen==='tpending'))render()}
-async function loadFriends(){if(Date.now()-_lfAt<15000)return;_lfAt=Date.now();const db=await getDB();if(!db)return;
- try{const q=await db.collection('baep_accounts').where('role','==','mentor').where('approved','==',true).get();let n=0;
-  q.docs.forEach(d=>{if(d.id===S.me)return;const u=(d.data()||{}).tu||{};const id='acc-'+d.id;const rd=ROADS.find(x=>x[0]===u.road);const dd=rd?[rd[6],rd[7]]:(DONGS[u.dong]||DONGS['영통동']);
+const tDoneAdd=rid=>{if(!rid)return;S.tDone=(S.tDone||[]).filter(x=>x!==rid).concat(rid).slice(-60)};
+/* 승인된 프렌드 (baep_profiles where approved==true · 공개 정보) — 진짜 계정으로 로그인했을 때만 */
+async function loadFriends(force){if(!live())return;if(!force&&Date.now()-_lfAt<15000)return;_lfAt=Date.now();const db=await pubDB();if(!db)return;
+ try{const q=await db.collection('baep_profiles').where('approved','==',true).get();let n=0;
+  q.docs.forEach(d=>{if(d.id===S.me)return;const u=safeDeep(d.data()||{});const id='acc-'+d.id;u.topics=(u.topics||[]).filter(k=>TOPICS[k]);u.wdays=(u.wdays||[]).filter(x=>W.includes(x)&&x.length===1);u.times=(u.times||[]).filter(x=>HHMM.test(x));const rd=ROADS.find(x=>x[0]===u.road);const dd=rd?[rd[6],rd[7]]:(DONGS[u.dong]||DONGS['영통동']);
    const t={id,acct:d.id,name:u.name||d.id,school:u.school||'',major:((u.major||'')+' '+(u.grade||'')).trim(),age:+u.age||21,gender:u.gender||'여',lat:dd[0],lon:dd[1],rad:+u.rad||3,rating:5.0,reviews:0,price:20000,color:'#CDEBDD',approved:true,
-    intro:u.intro||'새로 온 프렌드예요. 천천히, 여러 번 알려드릴게요.',topics:u.topics||['taxi'],tags:['새 프렌드'],wd:(u.wdays&&u.wdays.length?u.wdays:['토']).map(x=>W.indexOf(x)),slots:u.times&&u.times.length?u.times:['14:00'],full:{},revs:[]};
+    intro:u.intro||'새로 온 프렌드예요. 천천히, 여러 번 알려드릴게요.',topics:u.topics&&u.topics.length?u.topics:['taxi'],tags:['새 프렌드'],wd:(u.wdays&&u.wdays.length?u.wdays:['토']).map(x=>W.indexOf(x)),slots:u.times&&u.times.length?u.times:['14:00'],full:{},revs:[]};
    const i=TUTORS.findIndex(x=>x.id===id);if(i>=0)TUTORS.splice(i,1,t);else{TUTORS.push(t);n++}});
-  if(n&&['list','topic','detail'].includes(S.screen))render()}catch(e){}}
+  if(n&&['list','topic','detail'].includes(S.screen))render()}catch(e){console.warn('[배프] 프렌드 목록을 못 읽었어요',e)}}
+/* 가입 (아이디·비밀번호 또는 간편로그인). 서버가 계정을 만들고 token 을 돌려줘요. 비밀번호는 서버로만 보내고 어디에도 남기지 않아요 */
+const ID_RE=/^[a-z][a-z0-9]{3,19}$/;
+async function doSignup({role,id,pw,account,profile}){const soc=window.BAEP_SOCIAL||null;
+ account=stripPw(account);
+ if((soc&&soc.demo)||(!WORKER&&DEMO_MODE&&!soc)){/* 시연: 서버 없이 이 기기 메모리에만 */
+  const lid=soc?soc.localId:id;if(!soc&&ACCOUNTS[lid])return {ok:false,code:'ID_TAKEN'};
+  ACCOUNTS[lid]=Object.assign({role,demo:true,local:true},account,role==='mentor'?{approved:false}:{});window.BAEP_SOCIAL=null;return {ok:true,acct:lid,role,local:true}}
+ if(!NET)return {ok:false,code:'NO_SERVER'};
+ if(!soc){const c=await api('/auth/check-id?id='+encodeURIComponent(id));if(!c.ok)return c;if(c.available===false)return {ok:false,code:'ID_TAKEN'}}
+ const body={role,account};if(profile)body.profile=profile;if(!soc){body.id=id;body.pw=pw}
+ const r=await api('/auth/signup',body,soc?{bearer:true}:{});if(!r.ok)return r;
+ const s=await signInToken(r.token);if(!s||!s.acct)return {ok:false,code:'SIGNED_NO_LOGIN',message:'가입은 됐어요. 로그인 화면에서 다시 로그인해 주세요'};
+ window.BAEP_SOCIAL=null;return {ok:true,acct:s.acct,role:s.role||role}}
+/* 프렌드 공개 프로필에 들어가는 필드만 (재학증명서·계좌·전화번호는 빼요) */
+const pubProfile=u=>({name:u.name||'',school:u.school||'',major:u.major||'',grade:u.grade||'',age:+u.age||'',gender:u.gender||'',dong:u.dong||'',road:u.road||'',rad:+u.rad||3,intro:u.intro||'',topics:(u.topics||[]).slice(),wdays:(u.wdays||[]).slice(),times:(u.times||[]).slice()});
+async function updateProfile(){const db=await myDB();if(!db||SES.role!=='mentor')return false;const u=S.tu;
+ try{await db.doc('baep_profiles/'+S.me).update({dong:u.dong||'',road:u.road||'',rad:+u.rad||3,intro:u.intro||'',topics:u.topics.slice(),wdays:u.wdays.slice(),times:u.times.slice(),updatedAt:Date.now()});return true}
+ catch(e){console.warn('[배프] 프로필 저장 실패',e);toast('프로필을 저장하지 못했어요. 인터넷 연결을 확인해 주세요',3600);return false}}
+/* 서버 로그인 뒤 내 계정으로 들어가기 (로그인·간편로그인·새로고침 복원 모두 여기로) */
+async function enterAccount(acct,role,o={}){const a=await loadOwnAcct(acct);if(!a)return false;a.role=role||a.role;
+ if(a.role!=='mentee'&&a.role!=='mentor')return false;ACCOUNTS[acct]=a;
+ S.login.err='';S.me=acct;S.hist=[];const via=o.via?` (${o.via})`:'';
+ if(a.role==='mentee'){Object.assign(S.sr,a.sr||{});S.sr.pw='';S.sr.pw2='';loadState(a);setHome();S.member.mentee=true;S.screen='home';render();watchReq();if(!o.quiet)toast((S.sr.name||'')+' 님, 어서 오세요'+via)}
+ else{Object.assign(S.tu,a.tu||{});S.tu.pw='';S.tu.pw2='';loadState(a);S.tu.approved=!!a.approved;S.member.mentor=true;if(a.approved)addMe();S.screen=a.approved?'thome':'tpending';render();if(a.approved)watchInbox();if(!o.quiet)toast((S.tu.name||'')+' 프렌드님, 어서 오세요'+via)}
+ try{dispatchEvent(new CustomEvent('baep:session',{detail:{acct,role:a.role,live:true}}))}catch(e){}
+ return true}
+/* 시연 계정으로 들어가기 (이 기기 안에서만) */
+function enterDemo(id){const a=ACCOUNTS[id];if(!a)return;if(SES.acct)signOutAll(false);S.login.err='';S.hist=[];S.me=id;
+ if(a.role==='admin'){S.ad.tab='dash';S.screen='admin';render()}
+ else if(a.role==='mentee'){A.demo();S.me=id;render();toast(S.sr.name+' 님, 어서 오세요')}
+ else{tutorDemo();S.me=id;render();watchInbox();toast(S.tu.name+' 프렌드님, 어서 오세요')}
+ try{dispatchEvent(new CustomEvent('baep:session',{detail:{acct:id,role:a.role,live:false}}))}catch(e){}}
+/* 운영자로 들어가기 (운영자 화면 admin.html 에서만) */
+function enterAdmin(acct){S.me=acct;ACCOUNTS[acct]={role:'admin'};S.login.err='';S.hist=[];S.ad.tab='dash';S.screen='admin';render();syncApps();loadFriends(true);
+ try{dispatchEvent(new CustomEvent('baep:session',{detail:{acct,role:'admin',live:true}}))}catch(e){}}
+/* 새로고침했을 때: Firebase 에 남은 로그인의 claims.acct 로 다시 들어가요 */
+async function restoreSession(){if(!NET)return false;const fb=await within(fbReady(),10000);if(!fb)return false;const u=fb.auth().currentUser;if(!u||u.isAnonymous)return false;
+ let c={};try{c=((await u.getIdTokenResult())||{}).claims||{}}catch(e){return false}
+ const idle=()=>!S.me&&!S.member.mentee&&!S.member.mentor&&['splash','join','adlogin'].includes(S.screen);
+ if(!c.acct){if(!/[#&]baep_auth=/.test(location.hash))await signOutAll(false);return false}   // 가입을 끝내지 못한 간편로그인은 정리
+ if(ADMIN_APP?c.role!=='admin':c.role==='admin')return false;   // 운영자 로그인은 운영자 화면에서만, 사용자 로그인은 사용자 앱에서만
+ if(!idle())return false;
+ Object.assign(SES,{uid:u.uid,acct:c.acct,role:c.role||null,provider:c.provider||null});
+ if(ADMIN_APP){enterAdmin(c.acct);return true}
+ const ok=await enterAccount(c.acct,c.role,{quiet:true});if(!ok)Object.assign(SES,{acct:null,role:null});return ok}
 const SAVE_FAIL='저장소에 저장하지 못했어요. 이 화면을 닫으면 계정이 사라질 수 있어요';
 const DUR={60:{l:'1시간',p:20000,pay:18000},90:{l:'1시간 30분',p:25000,pay:22500}};
 const endT=(t,m)=>{const[h,mm]=t.split(':').map(Number);const e=h*60+mm+ +m;return String(Math.floor(e/60)).padStart(2,'0')+':'+String(e%60).padStart(2,'0')};
@@ -949,7 +1111,7 @@ const MENU={
 const findItem=n=>{for(const c in MENU){const it=MENU[c].find(x=>x.n===n);if(it)return it}};
 
 /* ===================== state ===================== */
-const init=()=>({
+const init0=()=>({
  screen:'join',notis:[{id:1,ic:'bell',t:'배프에 오신 걸 환영해요',b:'동네 프렌드와 첫 수업을 예약하면 혼자 연습 기능이 열려요.',time:'오늘',go:'list',read:false}],hist:[],big:false,voice:false,guide:true,
  sr:{name:'김복순',age:74,phone:'010-2345-6789',city:'수원시',gu:'영통구',dong:'영통동',apt:'청명마을 주공아파트 401동',addr:'청명마을',area:'영통동 청명마을',topics:['taxi'],id:'',pw:'',pw2:'',memo:'',byChild:false,band:'80대',cphone:'',agree:[false,false,false]},role:'mentee',member:{mentee:false,mentor:false},req:null,
  gf:'전체',sort:'dist',
@@ -983,6 +1145,10 @@ const init=()=>({
   fbs:[{id:'f1',cat:'글씨가 작아요',txt:'결제 화면 글씨가 조금 더 컸으면 좋겠어요.',who:'김○수 배움님',date:'11월 2일',done:false},
        {id:'f2',cat:'칭찬해요',txt:'연습 화면 덕분에 키오스크가 안 무서워요.',who:'한○희 배움님',date:'11월 1일',done:true}]}
 });
+/* 'live' 모드: 가입 칸에 시연용 이름·학교를 미리 채우지 않고, 운영자 화면의 시연 데이터도 없애요 */
+const init=()=>{const s=init0();if(!DEMO_MODE){Object.assign(s.sr,{name:'',phone:'',apt:'',addr:'',area:s.sr.dong});s.sms.ph='';Object.assign(s.tu,{name:'',school:'',major:''});
+  Object.assign(s.ad,{apps:[],revs:[],pays:[],smsLog:[],fbs:[]})}
+ if(ADMIN_APP)s.screen='adlogin';return s};
 let S=init();
 
 /* ===================== helpers ===================== */
@@ -993,8 +1159,8 @@ const topbar=()=>`<header class="bar">${LOGOBTN()}<span style="flex:1"></span>${
 const hdr=(t,o={})=>`<header class="bar">${o.noBack?'':`<button class="ic-btn" data-a="back" aria-label="뒤로">${I('back')}</button>`}${LOGOBTN()}<h1>${t}</h1>${o.right||'<span class="sp"></span>'}</header>`;
 const bigBtn=()=>`<button class="ic-btn txt" data-a="big" aria-label="글씨 크기">${S.big?'글자 작게':'글자 크게'}</button>`;
 const steps=(n,of=3)=>`<div class="steps">${Array.from({length:of},(_,i)=>`<i class="${i<n?'on':''}"></i>`).join('')}</div>`;
-const nearby=()=>TUTORS.filter(t=>t.approved!==false&&!t.blocked&&covers(t));
-function toast(m,ms=2200){const t=document.getElementById('toast');t.textContent=m;t.hidden=false;clearTimeout(toast._t);toast._t=setTimeout(()=>t.hidden=true,ms)}
+const nearby=()=>TUTORS.filter(t=>t.approved!==false&&!t.blocked&&!t.stub&&!(t.fake&&!DEMO_MODE)&&covers(t));
+function toast(m,ms=2200){const t=document.getElementById('toast');if(!DEMO_MODE)m=String(m).replace(/\s*\(시연[^)]*\)/g,'');t.textContent=m;t.hidden=false;clearTimeout(toast._t);toast._t=setTimeout(()=>t.hidden=true,ms)}
 function noti(title,body){const n=document.getElementById('noti');n.innerHTML=`<span class="ni">${LOGO(26)}</span><div><b>배프 · ${title}</b><p>${body}</p></div>`;n.hidden=false;clearTimeout(noti._t);noti._t=setTimeout(()=>n.hidden=true,3400);
  S.notis.push({id:Date.now()+Math.random(),ic:/결제/.test(title)?'card':/택시/.test(title)?'taxi':'bell',t:title,b:body,time:'방금',go:S.booking?'home':null,read:false});if(['home','practice','mine','list'].includes(S.screen))render()}
 function speak(t){if(!S.voice||!t)return;try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.lang='ko-KR';u.rate=.9;speechSynthesis.speak(u)}catch(e){}}
@@ -1116,10 +1282,10 @@ SC.pick=()=>`<header class="bar"><button class="ic-btn" data-a="back" aria-label
  <p class="note blue small" style="text-align:center;margin:0">부모님 대신 자녀분이 가입하셔도 돼요.<br>가입할 때 "부모님 대신 신청"을 골라 주세요.</p>
 </main>`;
 
-const acctFields=(p,o)=>`<label class="fld"><span>아이디 <b class="req-star">*</b> <small style="font-weight:600;color:var(--ink-3)">영문·숫자 4자 이상</small></span><input id="${p}-id" value="${esc(o.id)}" autocapitalize="off" spellcheck="false" autocomplete="username"></label>
- <label class="fld"><span>비밀번호 <b class="req-star">*</b> <small style="font-weight:600;color:var(--ink-3)">4자 이상</small></span><input id="${p}-pw" type="password" value="${esc(o.pw)}" autocomplete="new-password"></label>
+const acctFields=(p,o)=>`<label class="fld"><span>아이디 <b class="req-star">*</b> <small style="font-weight:600;color:var(--ink-3)">영문 소문자로 시작 · 소문자·숫자 4~20자</small></span><input id="${p}-id" inputmode="latin" value="${esc(o.id)}" autocapitalize="off" spellcheck="false" autocomplete="username"></label>
+ <label class="fld"><span>비밀번호 <b class="req-star">*</b> <small style="font-weight:600;color:var(--ink-3)">6자 이상</small></span><input id="${p}-pw" type="password" value="${esc(o.pw)}" autocomplete="new-password"></label>
  <label class="fld"><span>비밀번호 확인 <b class="req-star">*</b></span><input id="${p}-pw2" type="password" value="${esc(o.pw2)}" autocomplete="new-password"></label>`;
-const acctErr=o=>{if(!/^[a-zA-Z0-9]{4,}$/.test(o.id||''))return '아이디는 영문·숫자로 4자 이상 적어 주세요';if(ACCOUNTS[o.id])return '이미 있는 아이디예요. 다른 아이디를 적어 주세요';if((o.pw||'').length<4)return '비밀번호는 4자 이상 적어 주세요';if(o.pw!==o.pw2)return '비밀번호 확인이 달라요. 다시 적어 주세요';return ''};
+const acctErr=o=>{if(!ID_RE.test(o.id||''))return AUTH_MSG.BAD_ID;if(RESERVED_IDS.includes(o.id)||/^(kakao|naver)/.test(o.id))return '쓸 수 없는 아이디예요. 다른 아이디를 적어 주세요';if(ACCOUNTS[o.id])return AUTH_MSG.ID_TAKEN;if((o.pw||'').length<6||(o.pw||'').length>64)return AUTH_MSG.BAD_PW;if(o.pw!==o.pw2)return '비밀번호 확인이 달라요. 다시 적어 주세요';return ''};
 
 /* SC-03-1 배움님 회원가입 */
 SC.signup=()=>{const s=S.sr;const P=s.byChild?'부모님':'배움님';const ag=(i,t)=>`<button class="${s.agree[i]?'on':''}" data-a="agree" data-v="sr-${i}"><span class="bx">${s.agree[i]?'✓':''}</span>${t}</button>`;const need=s.byChild?3:2;const all=s.agree.slice(0,need).every(Boolean);
@@ -1234,7 +1400,10 @@ function withBar(html){const sc=S.screen;
  if(SENIOR_TAB[sc])return html+tabbar(SENIOR_TAB[sc]);
  if(TUTOR_TAB[sc])return html+ttabbar(TUTOR_TAB[sc]);
  return html}
-const demo=items=>`<div class="demo-bar"><span>시연용</span>${items.map(([l,a,v])=>`<button data-a="${a}"${v?` data-v="${v}"`:''}>${l} ▶</button>`).join('')}</div>`;
+const demo0=items=>`<div class="demo-bar"><span>시연용</span>${items.map(([l,a,v])=>`<button data-a="${a}"${v?` data-v="${v}"`:''}>${l} ▶</button>`).join('')}</div>`;
+/* 시연 막대: 'live' 모드에서는 안 그려요. 화면을 빠져나가는 버튼(자녀 화면 → 부모님 화면)만 보통 버튼으로 남겨요 */
+const DEMO_NAV={'c-exit':1};
+const demo=items=>DEMO_MODE?demo0(items):items.filter(([,a])=>DEMO_NAV[a]).map(([l,a,v])=>`<button class="link" data-a="${a}"${v?` data-v="${v}"`:''}>${l}</button>`).join('');
 SC.notis=()=>{const list=S.notis.slice().reverse();const html=topbar()+`<main class="body">
  <h2 class="q">알림</h2>
  ${list.length?list.map(n=>`<button class="nt${n.read?'':' new'}" data-a="nt-open" data-v="${n.id}"><span class="nt-ic">${I(n.ic)}</span><div><b>${n.t}</b><p>${n.b}</p><small>${n.time}</small></div>${n.read?'':'<span class="nt-dot"></span>'}</button>`).join(''):'<div class="empty">아직 알림이 없어요</div>'}
@@ -1260,6 +1429,7 @@ const reqCard=()=>{const r=S.req;if(!r)return'';const t=tutor(r.tid);
  if(r.st==='ok')return `<div class="rq ok"><span class="rq-st">${I('check')} 수락됐어요 · 결제 전</span><b>${t.name} 프렌드가<br>수락했어요!</b><span class="rq-when">${when(r.day,r.slot)} · ${plT(r.place)}</span><button class="btn y" data-a="req-open">결제하러 가기</button><span class="small" style="opacity:.8">결제하면 수업이 확정돼요</span></div>`;
  return `<div class="rq no"><span class="rq-st">요청이 성사되지 않았어요</span><b>${t.name} 프렌드가<br>이번 시간은 어렵대요</b><span class="rq-when">요청했던 시간 · ${when(r.day,r.slot)}</span><button class="btn ghost" data-a="req-open">다른 프렌드 찾아보기</button></div>`};
 const reqNote=()=>{const r=S.req;if(!r||r.st!=='wait')return'';const t=tutor(r.tid)||{};
+ if(r.remote||!DEMO_MODE)return `<p class="small muted" style="margin:0">프렌드가 확인하면 알림으로 바로 알려드려요</p>`;
  return `<p class="small muted" style="margin:0">${r.to==='friend'?'시연: 프렌드 계정 <b>fr01</b>로 로그인하면 이 요청을 받아 수락할 수 있어요':r.to?`시연: ${esc(t.name)} 프렌드 계정으로 로그인하면 이 요청을 받아 수락할 수 있어요`:'시연용 프렌드라 실제로 받는 사람이 없어요. 아래 시연 버튼을 눌러 주세요'}</p>`};
 const hstate=()=>S.req?S.req.st:S.booking?(S.bphase||'before'):S.history.length?'week':'first';
 const pct=k=>S.skills[k]?S.skills[k].score:40;
@@ -1454,7 +1624,7 @@ SC.mine=()=>topbar()+`<main class="body">
  <div class="card"><div class="tg-row"><span><b>글씨 크게 보기</b><small>모든 화면 글씨가 커져요</small></span><button class="sw${S.big?' on':''}" data-a="big" aria-label="큰 글씨"></button></div>
  <div class="tg-row"><span><b>소리로 안내 듣기</b><small>연습할 때 할 일을 읽어드려요</small></span><button class="sw${S.voice?' on':''}" data-a="voice" aria-label="음성 안내"></button></div>
  <div class="tg-row"><span><b>수업 알림</b><small>수업 1시간 전, 30분 전</small></span><button class="sw on" data-a="noti-demo" aria-label="알림"></button></div>
- <div class="tg-row"><span><b>자녀 연결</b><small>결제 요청·수업 메모를 함께 받아요</small></span><button class="sw${S.sr.byChild||S.payer==='child'?' on':''}" data-a="child-link" aria-label="자녀 연결"></button></div></div>
+ <div class="tg-row demo-only"><span><b>자녀 연결</b><small>결제 요청·수업 메모를 함께 받아요</small></span><button class="sw${S.sr.byChild||S.payer==='child'?' on':''}" data-a="child-link" aria-label="자녀 연결"></button></div></div>
  ${S.booking?`<button class="opt" data-a="tab" data-v="home"><span class="oi">${I('cal')}</span><span><b>다음 수업 · ${when(S.booking.day,S.booking.slot)}</b><small>${tutor(S.booking.tid).name} 프렌드와 만나요</small></span></button>`:''}
  <button class="opt" data-a="go" data-v="list"><span class="oi">${I('search')}</span><span><b>프렌드 찾기</b><small>우리 집까지 와줄 수 있는 프렌드</small></span></button>
  <button class="opt" data-a="go" data-v="past"><span class="oi">${I('cal')}</span><span><b>지난 수업</b><small>후기·프렌드 메모·다시 예약하기</small></span></button>
@@ -1477,7 +1647,7 @@ const WD=['월','화','수','목','금','토','일'];
 const TTIMES=['10:00','12:00','14:00','16:00','18:00'];
 const filled=(...a)=>a.every(x=>String(x||'').trim());
 const NEXT={
- tsign:[()=>{const u=S.tu;return filled(u.id,u.pw,u.pw2,u.photo,u.name,u.school,u.major)},'다음','빠진 칸을 채워 주세요'],
+ tsign:[()=>{const u=S.tu;return (window.BAEP_SOCIAL||filled(u.id,u.pw,u.pw2))&&filled(u.photo,u.name,u.school,u.major)},'다음','빠진 칸을 채워 주세요'],
  tsign2:[()=>{const u=S.tu;return !!u.road&&u.topics.length&&u.wdays.length&&u.times.length&&filled(u.intro)},()=>S.tEdit?'저장하기':'다음','빠진 칸을 채워 주세요'],
  tsign3:[()=>{const u=S.tu;return u.phoneOk&&!!u.crime&&String(u.acct).length>=8&&u.agree.every(Boolean)},'등록 신청하기','빠진 칸을 채워 주세요'],
  tcomment:[()=>!!(S._tc&&String(S._tc.next||'').trim()),'코멘트 남기기','다음에 연습할 것을 적어 주세요']};
@@ -1497,7 +1667,7 @@ SC.tsign=()=>{const u=S.tu;const ph=u.photo&&u.photo!=='sample';
   <span class="cert-txt">${u.photo?`${I('check')}<b>재학증명서를 올렸어요</b><small>운영팀이 하루 안에 확인해요 · 다시 찍으려면 누르세요</small>`:`${I('camera')}<b>재학증명서 사진 찍기</b><small>글자가 잘 보이게 종이 전체를 찍어 주세요</small>`}</span>
   <input type="file" id="tu-file" accept="image/*" capture="environment">
  </label>
- ${u.photo?'':'<button class="link" data-a="tu-sample" data-v="photo">시연: 예시 재학증명서로 채우기</button>'}
+ ${u.photo||!DEMO_MODE?'':'<button class="link demo-only" data-a="tu-sample" data-v="photo">시연: 예시 재학증명서로 채우기</button>'}
  <label class="fld"><span>이름 <b class="req-star">*</b></span><input id="tu-name" value="${esc(u.name)}" autocomplete="name"></label>
  <label class="fld"><span>대학교 <b class="req-star">*</b></span><input id="tu-school" value="${esc(u.school)}"></label>
  <div class="row2"><label class="fld"><span>학과 <b class="req-star">*</b></span><input id="tu-major" value="${esc(u.major)}"></label><label class="fld"><span>학년</span><select id="tu-grade">${opts(GRADES,u.grade)}</select></label></div>
@@ -1531,11 +1701,11 @@ SC.tsign3=()=>{const u=S.tu;const a=u.agree;const all=a.every(Boolean);const ag=
  <div class="fld"><span>휴대폰 본인인증 <b class="req-star">*</b></span>
   ${u.phoneOk?`<div class="sms-ok">${I('check')}<span><b>${esc(u.phone)}</b> 본인인증 완료</span></div>`:`
   <div class="asearch"><input id="tu-phone" inputmode="tel" value="${esc(u.phone)}" placeholder="010-0000-0000"><button class="btn b" data-a="tu-code">${u.codeSent?'다시 받기':'인증번호 받기'}</button></div>
-  ${u.codeSent?`<div class="asearch"><input id="tu-code" inputmode="numeric" maxlength="6" placeholder="인증번호 6자리"><button class="btn b" data-a="tu-verify">확인</button></div><small class="muted">남은 시간 3:00 · 시연용 인증번호 123456</small>`:''}`}
+  ${u.codeSent?`<div class="asearch"><input id="tu-code" inputmode="numeric" maxlength="6" placeholder="인증번호 6자리"><button class="btn b" data-a="tu-verify">확인</button></div><small class="muted">남은 시간 3:00<span class="demo-only"> · 시연용 인증번호 123456</span></small>`:''}`}
  </div>
  <div class="fld"><span>범죄경력회보서 <b class="req-star">*</b> <small style="font-weight:600;color:var(--ink-3)">정부24에서 받은 파일이나 사진</small></span>
   <label class="upl${u.crime?' ok':''}">${u.crime?`${I('check')}<b>${esc(u.crime)}</b><small>올렸어요 · 바꾸려면 누르세요</small>`:`${I('door')}<b>파일 올리기</b><small>PDF 또는 사진</small>`}<input type="file" id="tu-crime" accept="image/*,application/pdf"></label>
-  ${u.crime?'':'<button class="link" data-a="tu-sample" data-v="crime">시연: 예시 파일로 채우기</button>'}
+  ${u.crime||!DEMO_MODE?'':'<button class="link demo-only" data-a="tu-sample" data-v="crime">시연: 예시 파일로 채우기</button>'}
  </div>
  <div class="row2"><label class="fld"><span>은행</span><select id="tu-bank">${opts(['국민은행','신한은행','우리은행','하나은행','카카오뱅크','토스뱅크'],u.bank)}</select></label><label class="fld"><span>예금주</span><input value="${esc(u.name)}" readonly></label></div>
  <label class="fld"><span>계좌번호 <b class="req-star">*</b> <small style="font-weight:600;color:var(--ink-3)">수업료를 받을 계좌 · 예금주는 가입한 이름과 같아야 해요</small></span><input id="tu-acct" inputmode="numeric" placeholder="- 없이 숫자만" value="${esc(u.acct)}"></label>
@@ -1549,7 +1719,7 @@ SC.tpending=()=>`<header class="bar">${LOGOBTN()}<span style="flex:1"></span>${b
  <div class="sec">기다리는 동안 읽어 보세요</div>
  <button class="opt" data-a="go" data-v="tguide"><span class="oi">${I('light')}</span><span><b>첫 수업 가이드</b><small>수업 순서, 말투, 자주 막히는 부분</small></span></button>
  <button class="opt" data-a="go" data-v="tsafe"><span class="oi">${I('shield')}</span><span><b>안심 수업 약속</b><small>공공장소, 대신 입력·현금 금지</small></span></button>
- ${demo([['운영팀 승인 받기','t-approve']])}
+ ${demo([['운영팀 승인 받기','t-approve']])}${live()?'<button class="btn ghost" data-a="t-recheck">승인됐는지 확인하기</button>':''}
 </main><footer class="cta"><button class="btn ghost" data-a="logo">나가기</button></footer>`;
 
 SC.tguide=()=>hdr('첫 수업 가이드')+`<main class="body guide">
@@ -1674,32 +1844,34 @@ const adPill=(st)=>{const m={'대기':'wait','승인':'done','반려':'bad','확
 const docMock=a=>a.doc?`<img src="${a.doc}" alt="${esc(a.name)} 재학증명서 사진" class="ad-doc-img">`
  :`<div class="ad-doc"><b>재 학 증 명 서</b><span>성명 ${esc(a.name)}</span><span>소속 ${esc(a.school)} ${esc(a.major)}</span><span>위 학생은 2026학년도 2학기 재학 중임을 증명함</span><i>${esc(a.school)} 총장 (인)</i></div>`;
 
-SC.adlogin=()=>hdr('운영자 로그인')+`<main class="body j">
+/* 운영자 로그인 — admin.html(index.html?app=admin)에서만 보여요. 서버 로그인 뒤 role 'admin' 이어야 들어가요 */
+SC.adlogin=()=>{const L=S.adl||(S.adl={id:'',err:'',busy:false});return `<header class="bar"><span class="sp"></span>${bigBtn()}</header><main class="body j">
  <section class="j-brand"><span class="j-mark">${LOGO(64)}</span><h1 class="j-name" style="font-size:2.6em">배프 운영자</h1><p class="j-tag">운영팀만 들어올 수 있어요</p></section>
- <div class="card" style="display:flex;flex-direction:column;gap:.8em">
-  <label class="fld"><span>운영자 계정</span><input id="ad-id" value="ops@baepu.kr" autocomplete="username"></label>
-  <label class="fld"><span>비밀번호</span><input id="ad-pw" type="password" value="baepu2026" autocomplete="current-password"></label>
-  <div class="note blue small">실제 서비스에서는 운영자 권한이 있는 계정만 로그인되고, 접속 기록이 남아요.</div>
-  <button class="btn b" data-a="ad-login">운영자 화면 열기</button>
+ <div class="card login" style="display:flex;flex-direction:column;gap:.8em">
+  <label class="fld"><span>운영자 아이디</span><input id="ad-id" value="${esc(L.id)}" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="운영자 아이디"></label>
+  <label class="fld"><span>비밀번호</span><input id="ad-pw" type="password" autocomplete="current-password" placeholder="비밀번호" enterkeyhint="go"></label>
+  ${L.err?`<p class="err" role="alert">${esc(L.err)}</p>`:''}
+  <button class="btn b" data-a="ad-login" ${L.busy?'disabled':''}>${L.busy?'확인하고 있어요…':'운영자 화면 열기'}</button>
+  <div class="note blue small">운영자 권한이 있는 계정만 들어올 수 있어요. 권한이 없으면 화면을 열어도 데이터가 보이지 않아요.</div>
  </div>
- <button class="link" data-a="logo">앱 첫 화면으로</button>
-</main>`;
+ ${DEMO_MODE?'<p class="j-acc small muted demo-only">시연용 운영자 계정 · <b>admin</b> / 1234 (이 기기 안 가짜 데이터)</p>':''}
+</main>`};
 
 SC.admin=()=>{const c=adCounts(),tab=AD().tab;const badge={apps:c.apps,revs:c.revs,pays:c.pays,fbs:c.fbs};
  const nav=AD_TABS.map(([k,i,l])=>`<button class="${tab===k?'on':''}" data-a="ad-tab" data-v="${k}">${I(i)}<span>${l}</span>${badge[k]?`<em>${badge[k]}</em>`:''}</button>`).join('');
  const title=AD_TABS.find(t=>t[0]===tab)[2];
- return `<div class="ad-browser"><span class="dots"><i></i><i></i><i></i></span><span class="url">admin.baepu.kr/${tab}</span></div>
+ return `<div class="ad-browser"><span class="dots"><i></i><i></i><i></i></span><span class="url">${ADMIN_APP?'admin.html':'admin.baepu.kr'}/${tab}</span></div>
  <div class="ad">
-  <aside class="ad-nav">${LOGOBTN(26)}<small class="ad-role">운영자</small><nav>${nav}</nav><button class="ad-out" data-a="logo">${I('door')}<span>앱으로 나가기</span></button></aside>
-  <section class="ad-main"><header class="ad-head"><h2>${title}</h2><span class="muted small tabnum">${DT(TODAYN).getUTCFullYear()}년 ${mdw(TODAYN)} · ops@baepu.kr</span></header>
+  <aside class="ad-nav">${LOGOBTN(26)}<small class="ad-role">운영자</small><nav>${nav}</nav><button class="ad-out" data-a="logo">${I('door')}<span>${ADMIN_APP?'로그아웃':'앱으로 나가기'}</span></button></aside>
+  <section class="ad-main"><header class="ad-head"><h2>${title}</h2><span class="muted small tabnum">${DT(TODAYN).getUTCFullYear()}년 ${mdw(TODAYN)} · ${esc(S.me||'운영자')}${S.me&&isDemoAcct(S.me)?' (시연)':''}</span></header>
   <div class="ad-body">${AD_VIEW[tab]()}</div></section>
  </div>`};
 
 const AD_VIEW={
  dash:()=>{const c=adCounts(),A_=AD();const paid=A_.pays.reduce((s,p)=>s+p.amt,0);const active=TUTORS.filter(t=>t.approved!==false&&!t.blocked).length;
-  const dongs=[['영통동',46],['매탄동',31],['망포동',22],['원천동',15],['이의동',9],['하동',5]];const mx=46;
+  const dongs=DEMO_MODE?[['영통동',46],['매탄동',31],['망포동',22],['원천동',15],['이의동',9],['하동',5]]:(A_.dongs||[]);const mx=Math.max(1,...dongs.map(d=>d[1]));
   return `<div class="ad-kpis tabnum">
-   <div><small>배움님 회원</small><b>${128+(A_.newSeniors||0)}명</b><span>이번 주 +${6+(A_.newSeniors||0)}</span></div>
+   <div><small>배움님 회원</small><b>${DEMO_MODE?128+(A_.newSeniors||0):(A_.mentees!=null?A_.mentees:'-')}명</b><span>${DEMO_MODE?'이번 주 +'+(6+(A_.newSeniors||0)):'가입한 배움님'}</span></div>
    <div><small>활동 중인 프렌드</small><b>${active}명</b><span>승인 대기 ${c.apps}명</span></div>
    <div><small>11월 수업</small><b>${A_.pays.length}회</b><span>1시간 30분 ${A_.pays.filter(p=>p.dur===90).length}회</span></div>
    <div><small>11월 결제액</small><b>${won(paid)}</b><span>수수료 ${won(Math.round(paid*.1))}</span></div>
@@ -1712,7 +1884,7 @@ const AD_VIEW={
     ${dongs.map(([d,n])=>`<div class="mt-row"><span>${d}</span><span class="mt-bar"><i style="width:${n/mx*100}%"></i></span><em class="tabnum">${n}명</em></div>`).join('')}
    </div></div>
    <div class="card"><h3 class="ad-h3">혼자 연습 사용</h3><div class="ad-mini tabnum">
-    <div><b>${74+(A_.practiceRuns||0)}회</b><small>이번 주 연습</small></div><div><b>62%</b><small>결제 회원 중 연습한 비율</small></div><div><b>택시 부르기</b><small>가장 많이 연습</small></div></div>
+    <div><b>${DEMO_MODE?74+(A_.practiceRuns||0):(A_.practiceRuns||0)}회</b><small>이번 주 연습</small></div><div><b>${DEMO_MODE?'62%':'-'}</b><small>결제 회원 중 연습한 비율</small></div><div><b>${DEMO_MODE?'택시 부르기':'-'}</b><small>가장 많이 연습</small></div></div>
     <p class="small muted" style="margin:.6em 0 0">혼자 연습은 결제한 배움님에게만 열려요.</p></div>
   </div>`},
  apps:()=>{const L=AD().apps;return L.length?`<div class="ad-list">${L.map(a=>`<div class="card ad-app">
@@ -1762,6 +1934,7 @@ function scInfo(){const sc=S.screen;
  return SCN[sc]||['번호 없음',sc]}
 function scTag(){const [id,nm,tmp]=scInfo();return `<button class="sc-tag${S.scOpen?' open':''}" data-a="sc-tag" aria-label="화면번호 ${S.scOpen?'접기':'보기'}">${S.scOpen?`<b>${id}</b> ${nm}${tmp?' <em>(임시)</em>':''}`:'#'}</button>`}
 function render(){
+ if(ADMIN_APP)adminGuard();
  const body=$app.querySelector('.body,.res,.ks-grid');const keep=S.screen===lastScreen&&body?body.scrollTop:0;
  if(S.screen!=='thome'&&S.tDecl){clearTimeout(A._u);S.tDecl=null}
  if(S.screen==='tcomment'&&!S.tc)S.screen='thome';
@@ -1777,6 +1950,9 @@ function render(){
   const h=$app.querySelector('.hint span');const ht=h?h.textContent:'';if(ht&&ht!==lastSpoken){lastSpoken=ht;speak(ht)}
  if(S.screen==='taxi'&&S.tx.step==='search'&&!S.tx.listening){const q=document.getElementById('tx-q');if(q&&!q.value)setTimeout(()=>{try{q.focus({preventScroll:true})}catch(e){}},50)}
 }
+/* 운영자 화면(admin.html)에서는 운영자 로그인·운영자 화면만 그려요 */
+function adminGuard(){const ok=S.me&&((isDemoAcct(S.me)&&ACCOUNTS[S.me].role==='admin')||(SES.role==='admin'&&S.me===SES.acct));
+ if(!ok){S.screen='adlogin';S.hist=[]}else if(S.screen!=='admin'){S.screen='admin';S.hist=[]}}
 function go(s,push=true){if(push&&S.screen!==s)S.hist.push(S.screen);S.screen=s;render()}
 function back(){S.screen=S.hist.pop()||'join';render()}
 function hintStep(o){if(S.guide)o.hints++}
@@ -1792,10 +1968,24 @@ const A={
   S.history=[{tid:'t1',date:mdw(TODAYN-13),dur:90,topics:['taxi'],reviewed:true,note:{date:md(TODAYN-13),text:'택시 앱에서 도착지 검색까지 혼자 하셨어요! 호출 버튼 위치를 자주 헷갈려 하세요.',next:'음성으로 목적지 말해서 찾기'}}];
   S.member.mentee=true;S.hist=[];S.screen='home';render()},
  'nt-open':v=>{const n=S.notis.find(x=>x.id==v);if(n&&n.go){S.hist=['notis'];S.screen=n.go;render()}},
- 'ad-enter':()=>{S.hist=[];S.ad.tab='dash';S.screen='admin';render();syncApps()},
- 'ad-login':()=>{S.hist=[];S.ad.tab='dash';S.screen='admin';render()},
+ 'ad-enter':()=>{if(!DEMO_MODE)return;S.hist=[];S.ad.tab='dash';S.screen='admin';render()},   /* 시연: 이 기기 안 가짜 데이터로 보는 운영자 화면 */
+ /* 운영자 로그인 (admin.html). 서버 로그인 뒤 role 'admin' claim 이 있어야 들어가요 */
+ 'ad-login':async()=>{const L=S.adl||(S.adl={id:'',err:'',busy:false});if(L.busy)return;const id=((document.getElementById('ad-id')||{}).value||'').trim().toLowerCase(),pw=(document.getElementById('ad-pw')||{}).value||'';L.id=id;
+  if(!id||!pw){L.err='아이디와 비밀번호를 모두 적어 주세요';render();return}
+  if(ACCOUNTS[id]&&ACCOUNTS[id].demo){if(ACCOUNTS[id].pw!==pw){L.err=AUTH_MSG.BAD_LOGIN;render();return}if(ACCOUNTS[id].role!=='admin'){L.err='운영자 계정이 아니에요';render();return}
+   L.err='';if(SES.acct)signOutAll(false);S.me=id;S.hist=[];S.ad.tab='dash';S.screen='admin';render();return}
+  L.busy=true;L.err='';render();const r=await api('/auth/login',{id,pw});
+  if(!r.ok){L.busy=false;L.err=errMsg(r);render();return}
+  if(r.role!=='admin'){L.busy=false;L.err='운영자 계정이 아니에요';render();return}
+  const ss=await signInToken(r.token);L.busy=false;
+  if(!ss||ss.role!=='admin'){if(ss)await signOutAll(false);L.err=ss?'운영자 계정이 아니에요':AUTH_MSG.NET;render();return}
+  L.err='';enterAdmin(ss.acct)},
  'ad-tab':v=>{S.ad.tab=v;render();if(v==='apps'||v==='dash')syncApps()},
- 'ad-approve':v=>{const a=S.ad.apps.find(x=>x.id===v);a.st='승인';if(a.acct)(async()=>{const ac=await findAcct(a.acct);if(ac){ac.approved=true;if(ac.tu)ac.tu.approved=true;const ok=await saveAcct(a.acct,ac);if(!ok)toast(SAVE_FAIL,4200)}})();
+ 'ad-approve':v=>{const a=S.ad.apps.find(x=>x.id===v);if(!a)return;
+  if(a.acct&&live()&&SES.role==='admin'){(async()=>{const db=await getDB();if(!db){toast(AUTH_MSG.NET);return}   /* 진짜 승인: 공개 프로필 + 계정 문서의 approved 만 바꿔요 */
+    try{await db.doc('baep_profiles/'+a.acct).update({approved:true});await db.doc('baep_accounts/'+a.acct).update({approved:true});a.st='승인';render();toast(a.name+' 프렌드를 승인했어요. 이제 배움님 앱에 보여요');loadFriends(true)}
+    catch(e){console.warn('[배프] 승인 실패',e);toast('승인하지 못했어요. 운영자 권한과 인터넷 연결을 확인해 주세요',4200)}})();return}
+  a.st='승인';
   if(v==='me'){const t=tutor('me');if(t)t.approved=true}
   else if(!tutor(a.id)){const d=DONGS[a.dong]||DONGS['영통동'];TUTORS.push({id:a.id,name:a.name,school:a.school,major:a.major,age:a.age,gender:a.gender,lat:d[0],lon:d[1],rad:a.rad,rating:5.0,reviews:0,price:20000,color:'#D9ECFA',approved:true,
    intro:'새로 온 프렌드예요. 천천히, 여러 번 알려드릴게요.',topics:['taxi','kiosk'],tags:['새 프렌드'],days:[7,8,14,15,21,22],slots:['10:00','14:00'],full:{},revs:[]})}
@@ -1807,21 +1997,27 @@ const A={
  'ad-settle':v=>{settle(S.ad.pays.find(x=>x.id===v));render();toast('프렌드 계좌로 입금했어요')},
  'ad-settle-all':()=>{const w=S.ad.pays.filter(p=>p.st==='정산 대기');w.forEach(settle);render();toast(w.length+'건을 한 번에 정산했어요')},
  'ad-fb-done':v=>{S.ad.fbs.find(x=>x.id===v).done=true;render()},
- logo:()=>{try{saveState(true)}catch(e){}unwatchAll();_svLast='';clearTimeout(_svT);clearTimeout(A._c);clearTimeout(A._u);document.getElementById('noti').hidden=true;document.getElementById('toast').hidden=true;const keep={big:S.big,ad:S.ad,sc:S.scOpen};S=init();S.big=keep.big;S.ad=keep.ad;S.scOpen=keep.sc;render();toast('로그아웃했어요')},
+ logo:()=>{try{saveState(true)}catch(e){}unwatchAll();_svLast='';clearTimeout(_svT);clearTimeout(A._c);clearTimeout(A._u);document.getElementById('noti').hidden=true;document.getElementById('toast').hidden=true;
+  const real=!!SES.acct&&S.me===SES.acct;const was=S.me;if(was&&ACCOUNTS[was]&&!ACCOUNTS[was].demo)delete ACCOUNTS[was];
+  const keep={big:S.big,ad:S.ad,sc:S.scOpen};S=init();S.big=keep.big;if(!real&&DEMO_MODE&&!ADMIN_APP)S.ad=keep.ad;S.scOpen=keep.sc;
+  if(SES.acct)signOutAll(true);   /* 진짜 로그인이면 Firebase 로그아웃 → 익명으로 */
+  try{dispatchEvent(new CustomEvent('baep:logout',{detail:{acct:was,live:real}}))}catch(e){}
+  render();toast('로그아웃했어요')},
  restart:()=>A.logo(),
- 'logo-home':()=>{const m=S.member;if(!m.mentee&&!m.mentor){A.logo();return}S.hist=[];S.screen=m.mentor&&!m.mentee?(S.tu.approved?'thome':'tpending'):'home';render()},
+ 'logo-home':()=>{if(ADMIN_APP)return;const m=S.member;if(!m.mentee&&!m.mentor){A.logo();return}S.hist=[];S.screen=m.mentor&&!m.mentee?(S.tu.approved?'thome':'tpending'):'home';render()},
  /* SC-01 로그인 */
- login:async()=>{const L=S.login;if(L.busy)return;const id=(document.getElementById('lg-id').value||'').trim(),pw=document.getElementById('lg-pw').value||'';L.id=id;
+ login:async()=>{const L=S.login;if(L.busy)return;const id=(document.getElementById('lg-id').value||'').trim().toLowerCase(),pw=document.getElementById('lg-pw').value||'';L.id=id;
   if(!id||!pw){L.err='아이디와 비밀번호를 모두 적어 주세요';render();return}
-  L.busy=true;const b=document.querySelector('[data-a="login"]');if(b){b.disabled=true;b.textContent='확인하고 있어요…'}
-  const a=await findAcct(id);L.busy=false;
-  if(!a){L.err='없는 아이디예요. 처음이시면 아래 회원가입을 눌러 주세요';render();return}
-  if(a.pw!==pw){L.err='비밀번호가 맞지 않아요';render();return}
-  L.err='';S.me=id;S.hist=[];
-  if(a.role==='admin'){S.ad.tab='dash';S.screen='admin';render();syncApps();return}
-  if(a.role==='mentee'){if(a.demo){A.demo();S.me=id}else{Object.assign(S.sr,a.sr);loadState(a);setHome();S.member.mentee=true;S.screen='home';render();watchReq()}toast(S.sr.name+' 님, 어서 오세요');return}
-  if(a.demo){tutorDemo();S.me=id;render();watchInbox()}else{Object.assign(S.tu,a.tu);loadState(a);S.tu.approved=!!a.approved;S.member.mentor=true;if(a.approved)addMe();S.screen=a.approved?'thome':'tpending';render();if(a.approved)watchInbox()}
-  toast(S.tu.name+' 프렌드님, 어서 오세요')},
+  const busy=on=>{L.busy=on;const b=document.querySelector('[data-a="login"]');if(b){b.disabled=on;b.textContent=on?'확인하고 있어요…':'로그인하기'}};
+  /* 시연 계정 ('demo' 모드만): 이 기기 안에서만 — 서버·Firestore 를 쓰지 않아요 */
+  if(ACCOUNTS[id]&&ACCOUNTS[id].demo&&ACCOUNTS[id].pw){if(ACCOUNTS[id].pw!==pw){L.err=AUTH_MSG.BAD_LOGIN;render();return}L.err='';enterDemo(id);return}
+  busy(true);const r=await api('/auth/login',{id,pw});
+  if(!r.ok){busy(false);L.err=errMsg(r);render();return}
+  if(r.role==='admin'){busy(false);L.err='운영자 계정은 운영자 화면에서만 로그인할 수 있어요';render();return}
+  const ss=await signInToken(r.token);
+  if(!ss||!ss.acct){busy(false);L.err=AUTH_MSG.NET;render();return}
+  const ok=await enterAccount(ss.acct,ss.role);busy(false);
+  if(!ok){L.err='계정 정보를 불러오지 못했어요. 잠시 후 다시 해 주세요';render()}},
  join:v=>{S.role=v;if(v==='mentor')go('tsign');else{S.payer=S.sr.byChild?'child':'self';go('signup')}},
  'sr-who':v=>{S.sr.byChild=v==='child';S.payer=S.sr.byChild?'child':'self';S.sr.agree[2]=false;render()},
  'sr-band':v=>{S.sr.band=v;render()},
@@ -1831,7 +2027,7 @@ const A={
  'addr-reset':p=>{const o=p==='sr'?S.sr:S.tu;o.road='';o.apt='';render()},
  agree:v=>{const [w,i]=v.split('-');const a=(w==='sr'?S.sr:S.tu).agree;const need=w==='sr'&&!S.sr.byChild?2:a.length;
   if(i==='all'){const to=!a.slice(0,need).every(Boolean);for(let k=0;k<a.length;k++)a[k]=k<need?to:false}else a[+i]=!a[+i];render()},
- 'sr-done':()=>{const s=S.sr;const er=acctErr(s);if(er){toast(er);return}
+ 'sr-done':()=>{const s=S.sr;const soc=window.BAEP_SOCIAL||null;if(!soc){const er=acctErr(s);if(er){toast(er);return}}
   if(!s.name.trim()){toast('이름을 적어 주세요');return}
   if(!/^01\d-?\d{3,4}-?\d{4}$/.test(s.phone)){toast('휴대폰 번호를 010-0000-0000처럼 적어 주세요');return}
   if(!(s.age>=50&&s.age<=110)){toast('나이를 다시 확인해 주세요');return}
@@ -1839,10 +2035,13 @@ const A={
   if(s.byChild&&!/^01\d-?\d{3,4}-?\d{4}$/.test(s.cphone)){toast('신청하는 분(자녀) 휴대폰 번호를 적어 주세요');return}
   const need=s.byChild?3:2;if(!s.agree.slice(0,need).every(Boolean)){toast('필수 약관에 동의해 주세요');return}
   if(S._busy)return;S._busy=true;
-  (async()=>{if(await findAcct(s.id)){S._busy=false;toast('이미 있는 아이디예요. 다른 아이디를 적어 주세요');return}
-   const ok=await saveAcct(s.id,{pw:s.pw,role:'mentee',date:md(TODAYN),sr:JSON.parse(JSON.stringify({...s,pw:'',pw2:'',agree:[true,true,true]}))});S._busy=false;
-   S.me=s.id;S.member.mentee=true;S.ad.newSeniors=(S.ad.newSeniors||0)+1;
-   S.hist=[];S.screen='home';render();toast(ok?`가입했어요. 다음부터 아이디 "${s.id}"로 로그인하세요`:SAVE_FAIL,ok?2600:4200)})()},
+  (async()=>{const account={date:md(TODAYN),sr:stripPw({...s,agree:[true,true,true]})};
+   const r=await doSignup({role:'mentee',id:s.id,pw:s.pw,account});S._busy=false;
+   if(!r.ok){toast(errMsg(r),3400);return}
+   S.sr.pw='';S.sr.pw2='';ACCOUNTS[r.acct]=Object.assign({role:'mentee'},account,r.local?{demo:true,local:true}:{});
+   S.me=r.acct;S.member.mentee=true;S.ad.newSeniors=(S.ad.newSeniors||0)+1;
+   S.hist=[];S.screen='home';render();toast(soc?`가입했어요. 다음부터 '${soc.label||'간편로그인'}로 시작하기'만 누르세요`:`가입했어요. 다음부터 아이디 "${r.acct}"로 로그인하세요`,2600);
+   try{dispatchEvent(new CustomEvent('baep:session',{detail:{acct:r.acct,role:'mentee',live:!r.local}}))}catch(e){}})()},
  'demo-tutor':()=>{tutorDemo();render();watchInbox()},
  big:()=>{S.big=!S.big;render()},
  voice:()=>{S.voice=!S.voice;render();if(S.voice){speak('소리 안내를 켰어요');lastSpoken=''}},
@@ -1865,11 +2064,18 @@ const A={
  place:v=>{S.place=v;render()},
  'go-home':()=>{S.hist=[];S.screen='home';render();toast('수락되면 알림과 문자로 알려드릴게요')},
  'req-open':()=>{const r=S.req;if(!r)return;Object.assign(S,{tid:r.tid,day:r.day,slot:r.slot,place:r.place,dur:r.dur});if(r.st==='ok'){S.accepted=true;go('pay')}else if(r.st==='no'){S.req=null;S.hist=['home'];S.screen='list';render()}else go('wait')},
- 'send-req':()=>{S.accepted=false;const rid='r'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);const to=reqKey(S.tid);
-  S.req={tid:S.tid,day:S.day,slot:S.slot,place:S.place,dur:S.dur,st:'wait',rid,to};
-  const doc={rid,to,from:S.me||null,tid:S.tid,who:S.sr.name,age:S.sr.age,area:(S.sr.area||'').split(' ')[0],dist:+tdist(tutor(S.tid)).toFixed(1),topics:S.sr.topics.length?S.sr.topics.slice():['taxi'],memo:S.sr.memo||'',day:S.day,time:S.slot,dur:S.dur,place:plT(S.place),pk:S.place,payer:S.payer==='child'?'자녀분이 결제':'본인 결제',st:'wait',created:Date.now(),updated:Date.now()};
-  reqWrite(rid,doc).then(ok=>{if(ok)watchReq()});go('wait')},
- 'sr-demo':v=>{const r=S.req;if(!r)return;if(r.rid)reqUpdate(r.rid,{st:v==='ok'?'ok':'no',why:v==='ok'?'':'시연',updated:Date.now()});v==='ok'?reqAccept():reqDecline()},
+ 'send-req':async(o={})=>{if(S._sending)return false;S.accepted=false;const rid='r'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);const t=tutor(S.tid);const to=reqKey(S.tid);
+  /* 진짜 계정 → 진짜 프렌드일 때만 Firestore. 시연 프렌드·시연 계정은 이 기기 안에서만 */
+  const remote=live()&&!!(t&&t.acct)&&!t.fake&&!isDemoAcct(t.acct);const inst=!!o.inst;const amount=DUR[S.dur].p;
+  S.req={tid:S.tid,day:S.day,slot:S.slot,place:S.place,dur:S.dur,st:'wait',rid,to,remote,amount,inst};
+  const doc={rid,to,from:S.me||null,payerAcct:S.me||null,amount,tid:S.tid,who:String(S.sr.name||'').slice(0,100),age:S.sr.age,area:(S.sr.area||'').split(' ')[0],dist:+tdist(t).toFixed(1),topics:S.sr.topics.length?S.sr.topics.slice(0,20):['taxi'],memo:String(S.sr.memo||'').slice(0,1000),day:S.day,time:S.slot,dur:S.dur,place:plT(S.place),pk:S.place,payer:S.payer==='child'?'자녀분이 결제':'본인 결제',st:'wait',created:Date.now(),updated:Date.now()};
+  if(inst)doc.inst=true;
+  if(remote){S._sending=true;const b=document.querySelector('[data-a="send-req"]');if(b){b.disabled=true;b.textContent='보내고 있어요…'}
+   const ok=await reqWrite(rid,doc,true);S._sending=false;
+   if(!ok){S.req=null;render();toast('요청을 보내지 못했어요. 인터넷 연결을 확인해 주세요',3400);return false}}
+  else reqWrite(rid,doc,false);
+  watchReq();if(!inst)go('wait');return true},
+ 'sr-demo':v=>{const r=S.req;if(!r)return;if(r.rid&&!r.remote)reqUpdate(r.rid,{st:v==='ok'?'ok':'no',why:v==='ok'?'':'시연',updated:Date.now()},false);v==='ok'?reqAccept():reqDecline()},
  phase:v=>{const b=S.booking;if(!b)return;
   if(v==='today'){S.bphase='today';noti('오늘 수업',`2시간 뒤 ${b.slot}에 ${tutor(b.tid).name} 프렌드를 만나요`)}
   if(v==='after'){S.bphase='after';S.note={date:md(b.day),text:'택시 앱에서 도착지 검색까지 혼자 하셨어요! 호출 버튼 위치를 자주 헷갈려 하세요.',next:'음성으로 목적지 말해서 찾기 · 키오스크 카드 결제'}}
@@ -1883,8 +2089,9 @@ const A={
  payer:v=>{S.payer=v;render()},
  method:v=>{S.method=v;render()},
  'child-send':()=>{S.childSent=true;render();toast('자녀분께 결제 요청 문자를 보냈어요');setTimeout(()=>{S.childPaid=true;if(S.screen==='pay'){render();noti('결제 완료','자녀분이 수업료 결제를 마쳤어요')}},2400)},
- pay:()=>{if(S.req&&S.req.rid){reqUpdate(S.req.rid,{st:'paid',updated:Date.now()});if(_rqUn){_rqUn();_rqUn=null}}S.req=null;if(S.booking)archive();S.booking={tid:S.tid,day:S.day,slot:S.slot,place:S.place,dur:S.dur,topics:S.sr.topics.slice(),memo:S.sr.memo};S.bphase='before';S.note=null;S.ad.pays.push({id:'y'+Date.now(),date:md(S.day),who:S.sr.name,tutor:tutor(S.tid).name,dur:S.dur,payer:S.payer==='child'?'자녀':'본인',amt:DUR[S.dur].p,st:'정산 대기',me:true});S.ad.newSeniors=1;S.paid=true;S.sms.sent=false;S.sms.ph=S.sr.phone||S.sms.ph;if(S.payer==='child')setTimeout(()=>{if(!S.sms.sent)A['sms-send'](true)},600);S.hist=[];go('done',false);if(S.payer==='self')toast(S.method+'로 결제했어요')},
- 'noti-demo':()=>{const b=S.booking||{tid:'t1',day:TODAYN+4,slot:'14:00',place:'cafe'};const t=tutor(b.tid);
+ /* 결제가 끝난 뒤 '수업 확정'으로 (진짜 결제는 서버가 baep_requests 에 paid 를 써요. 앱은 paid 를 절대 쓰지 않아요) */
+ pay:()=>{if(S.req&&S.req.rid){if(!S.req.remote)reqUpdate(S.req.rid,{st:'paid',updated:Date.now()},false);if(_rqUn){_rqUn();_rqUn=null}}S.req=null;if(S.booking)archive();S.booking={tid:S.tid,day:S.day,slot:S.slot,place:S.place,dur:S.dur,topics:S.sr.topics.slice(),memo:S.sr.memo};S.bphase='before';S.note=null;S.ad.pays.push({id:'y'+Date.now(),date:md(S.day),who:S.sr.name,tutor:tutor(S.tid).name,dur:S.dur,payer:S.payer==='child'?'자녀':'본인',amt:DUR[S.dur].p,st:'정산 대기',me:true});S.ad.newSeniors=1;S.paid=true;S.sms.sent=false;S.sms.ph=S.sr.phone||S.sms.ph;if(S.payer==='child')setTimeout(()=>{if(!S.sms.sent)A['sms-send'](true)},600);S.hist=[];go('done',false);if(S.payer==='self')toast(S.method+'로 결제했어요')},
+ 'noti-demo':()=>{if(!DEMO_MODE){toast('수업 1시간 전, 30분 전에 알림과 문자로 알려드려요');return}const b=S.booking||{tid:'t1',day:TODAYN+4,slot:'14:00',place:'cafe'};const t=tutor(b.tid);
   noti('1시간 전 알림',`1시간 뒤 ${b.slot}에 ${t.name} 프렌드와 수업이 있어요. ${plT(b.place)}`);
   setTimeout(()=>noti('30분 전 알림',`30분 뒤 수업이에요. 휴대폰을 충전해 두세요!`),3700)},
  'sc-tag':()=>{S.scOpen=!S.scOpen;render()},
@@ -1935,23 +2142,34 @@ const A={
  'tu-wd':v=>{const a=S.tu.wdays;a.includes(v)?a.splice(a.indexOf(v),1):a.push(v);a.sort((x,y)=>WD.indexOf(x)-WD.indexOf(y));render()},
  'tu-time':v=>{const a=S.tu.times;a.includes(v)?a.splice(a.indexOf(v),1):a.push(v);a.sort();render()},
  'tu-sample':v=>{if(v==='photo')S.tu.photo='sample';else S.tu.crime='범죄경력회보서_정부24.pdf';render()},
- 'tu-next1':async()=>{const er=acctErr(S.tu);if(er){toast(er);return}if(await findAcct(S.tu.id)){toast('이미 있는 아이디예요. 다른 아이디를 적어 주세요');return}go('tsign2')},
- 'tu-next2':()=>{if(S.tEdit){S.tEdit=false;addMe();if(S.me&&ACCOUNTS[S.me]&&ACCOUNTS[S.me].tu)Object.assign(ACCOUNTS[S.me].tu,S.tu);back();toast('바꾼 내용을 저장했어요');return}go('tsign3')},
- 'tu-code':()=>{const el=document.getElementById('tu-phone');const ph=(el&&el.value.trim())||'';if(!/^01\d-?\d{3,4}-?\d{4}$/.test(ph)){toast('휴대폰 번호를 010-0000-0000처럼 적어 주세요');return}S.tu.phone=ph;S.tu.codeSent=true;render();toast('인증번호를 보냈어요 (시연용 123456)')},
+ 'tu-next1':async()=>{if(window.BAEP_SOCIAL){go('tsign2');return}const er=acctErr(S.tu);if(er){toast(er);return}
+  if(NET&&WORKER){const c=await api('/auth/check-id?id='+encodeURIComponent(S.tu.id));if(!c.ok){toast(errMsg(c),3200);return}if(c.available===false){toast(AUTH_MSG.ID_TAKEN);return}}
+  go('tsign2')},
+ 'tu-next2':()=>{if(S.tEdit){S.tEdit=false;addMe();const a=S.me&&ACCOUNTS[S.me];if(a&&a.tu)Object.assign(a.tu,stripPw(S.tu));if(live())updateProfile();back();toast('바꾼 내용을 저장했어요');return}go('tsign3')},
+ 'tu-code':()=>{const el=document.getElementById('tu-phone');const ph=(el&&el.value.trim())||'';if(!/^01\d-?\d{3,4}-?\d{4}$/.test(ph)){toast('휴대폰 번호를 010-0000-0000처럼 적어 주세요');return}S.tu.phone=ph;if(!DEMO_MODE){S.tu.phoneOk=true;render();toast('번호를 저장했어요. 승인 전에 운영팀이 이 번호로 확인 연락을 드려요',3600);return}S.tu.codeSent=true;render();toast('인증번호를 보냈어요 (시연용 123456)')},
  'tu-verify':()=>{const el=document.getElementById('tu-code');if((el&&el.value.trim())!=='123456'){toast('인증번호가 맞지 않아요');return}S.tu.phoneOk=true;render();toast('본인인증을 마쳤어요')},
- 'tu-submit':()=>{const u=S.tu;u.linked=true;addMe();
-  const acc={pw:u.pw,role:'mentor',approved:false,date:md(TODAYN),tu:JSON.parse(JSON.stringify({...u,pw:'',pw2:'',photo:u.photo?'sample':'',approved:false}))};S.me=u.id;S.member.mentor=true;
-  saveAcct(u.id,acc).then(ok=>{if(!ok)toast(SAVE_FAIL,4200)});
-  const ap={id:'me',me:true,acct:u.id,name:u.name||'새 프렌드',school:u.school,major:u.major+' '+u.grade,age:u.age,gender:u.gender,dong:u.dong,addr:fullAddr(u),rad:u.rad,date:md(TODAYN),crime:!!u.crime,doc:u.photo==='sample'?'':u.photo,st:'대기'};
-  const ex=S.ad.apps.find(a=>a.id==='me');ex?Object.assign(ex,ap):S.ad.apps.unshift(ap);
-  S.hist=[];S.screen='tpending';render();toast('등록 신청을 마쳤어요')},
+ 'tu-submit':()=>{const u=S.tu;if(S._busy)return;S._busy=true;const b=document.getElementById('nx');if(b){b.disabled=true;b.textContent='보내고 있어요…'}
+  (async()=>{const account={date:md(TODAYN),tu:stripPw({...u,photo:u.photo?'sample':'',approved:false,codeSent:false})};
+   const r=await doSignup({role:'mentor',id:u.id,pw:u.pw,account,profile:pubProfile(u)});S._busy=false;
+   if(!r.ok){toast(errMsg(r),3400);render();return}
+   u.pw='';u.pw2='';u.linked=true;u.approved=false;ACCOUNTS[r.acct]=Object.assign({role:'mentor',approved:false},account,r.local?{demo:true,local:true}:{});
+   S.me=r.acct;S.member.mentor=true;addMe();
+   if(!live()){/* 시연: 같은 기기의 시연 운영자 화면에 보이게 */
+    const ap={id:'me',me:true,acct:r.acct,name:u.name||'새 프렌드',school:u.school,major:u.major+' '+u.grade,age:u.age,gender:u.gender,dong:u.dong,addr:fullAddr(u),rad:u.rad,date:md(TODAYN),crime:!!u.crime,doc:u.photo==='sample'?'':u.photo,st:'대기'};
+    const ex=S.ad.apps.find(a=>a.id==='me');ex?Object.assign(ex,ap):S.ad.apps.unshift(ap)}
+   S.hist=[];S.screen='tpending';render();toast('등록 신청을 마쳤어요');
+   try{dispatchEvent(new CustomEvent('baep:session',{detail:{acct:r.acct,role:'mentor',live:!r.local}}))}catch(e){}})()},
+ /* 승인됐는지 다시 확인 (내 계정 문서의 approved) */
+ 't-recheck':async()=>{if(!live())return;const a=await loadOwnAcct(S.me);if(!a){toast(AUTH_MSG.NET);return}
+  if(a.approved){Object.assign(ACCOUNTS[S.me]||{},{approved:true});S.tu.approved=true;addMe();S.hist=[];S.screen='thome';render();watchInbox();tnoti('승인 완료','재학 확인이 끝났어요. 이제 배움님께 내 프로필이 보여요')}
+  else toast('아직 확인 중이에요. 승인되면 문자로 알려드려요',3000)},
  't-approve':()=>{setTimeout(watchInbox,0);const a=S.ad.apps.find(x=>x.id==='me');if(a)A['ad-approve']('me');S.tu.approved=true;const t=tutor('me');if(t)t.approved=true;
   S.hist=[];S.screen='thome';render();tnoti('승인 완료','재학 확인이 끝났어요. 이제 배움님께 내 프로필이 보여요')},
  't-tab':v=>{S.hist=[];S.screen=v;render()},
  't-edit':()=>{S.tEdit=true;go('tsign2')},
  't-up':()=>toast('확정된 수업이에요. 수업 당일 홈에서 전화·길찾기를 할 수 있어요'),
  't-newreq':()=>{S.reqs.unshift(sampleReq());tnoti('새 수업 요청','김복순 배움님이 수업을 요청했어요');S.hist=[];S.screen='thome';render()},
- 't-accept':v=>{const r=S.reqs.find(x=>x.id===v);if(!r)return;S.reqs=S.reqs.filter(x=>x.id!==v);if(r.rid)reqUpdate(r.rid,{st:'ok',updated:Date.now()});else if(v==='r1'&&S.req)setTimeout(reqAccept,0);
+ 't-accept':v=>{const r=S.reqs.find(x=>x.id===v);if(!r)return;S.reqs=S.reqs.filter(x=>x.id!==v);if(r.rid)reqUpdate(r.rid,{st:'ok',updated:Date.now()},!!r.remote);else if(v==='r1'&&S.req)setTimeout(reqAccept,0);
   S.tc={...r,st:'pay'};S.hist=[];S.screen='thome';render();toast('수락했어요. 배움님이 결제하면 확정돼요')},
  't-decline':v=>{S.tSheet={id:v,why:'',etc:''};render()},
  'ds-why':v=>{S.tSheet.why=S.tSheet.why===v?'':v;render()},
@@ -1959,14 +2177,14 @@ const A={
  'ds-bg':(v,el,e)=>{if(e.target===el){S.tSheet=null;render()}},
  'ds-ok':()=>{const s=S.tSheet;const r=S.reqs.find(x=>x.id===s.id);if(!r)return;S.reqs=S.reqs.filter(x=>x.id!==s.id);
   const why=s.why&&s.why.startsWith('기타')?(s.etc.trim()||'기타'):s.why;S.tDecl={r,why,undo:true};S.tSheet=null;
-  document.getElementById('toast').hidden=true;S.hist=[];S.screen='thome';render();clearTimeout(A._u);A._u=setTimeout(()=>{if(!S.tDecl)return;S.tDecl.undo=false;if(r.rid)reqUpdate(r.rid,{st:'no',why:why||'',updated:Date.now()});else if(r.id==='r1'&&S.req)reqDecline();if(S.screen==='thome')render()},5000)},
+  document.getElementById('toast').hidden=true;S.hist=[];S.screen='thome';render();clearTimeout(A._u);A._u=setTimeout(()=>{if(!S.tDecl)return;S.tDecl.undo=false;if(r.rid)reqUpdate(r.rid,{st:'no',why:why||'',updated:Date.now()},!!r.remote);else if(r.id==='r1'&&S.req)reqDecline();if(S.screen==='thome')render()},5000)},
  't-undo':()=>{clearTimeout(A._u);if(!S.tDecl)return;S.reqs.unshift(S.tDecl.r);S.tDecl=null;render();toast('거절을 취소했어요')},
  't-ph':v=>{const c=S.tc;if(!c)return;
   if(v==='conf')tnoti('결제 완료',`${c.who} 배움님이 결제했어요. 수업이 확정됐어요`);
   if(v==='today')tnoti('오늘 수업',`2시간 뒤 ${c.time}에 ${c.who} 배움님을 만나요`);
   if(v==='after')S.money.push({d:mdot(c.day),who:c.who,dur:c.dur,st:'입금 예정 '+mslash(fixD(c.day)+6)});
   if(v==='cancel'){c.why='배움님이 결제 기한(24시간) 안에 결제하지 않아 자동으로 취소됐어요';tnoti('수업 취소',`${c.who} 배움님 수업이 성사되지 않았어요`)}
-  if(c.rid&&(v==='none'||v==='cancel'))reqUpdate(c.rid,v==='cancel'?{st:'cancel',fdone:true,updated:Date.now()}:{fdone:true});
+  if(c.rid&&(v==='none'||v==='cancel')){if(c.remote)tDoneAdd(c.rid);reqUpdate(c.rid,v==='cancel'?{st:'cancel',fdone:true,updated:Date.now()}:{fdone:true},!!c.remote)}   /* 프렌드는 st·why·updated·fdone 만 바꿔요 */
   if(v==='none')S.tc=null;else c.st=v;S.hist=[];S.screen='thome';render()},
  callb:()=>toast('안심번호로 '+S.tc.who+' 배움님께 전화를 걸어요 (시연)'),
  't-route':()=>toast('지도 앱에서 '+S.tc.place+'까지 길찾기를 열어요 (시연)'),
@@ -1975,7 +2193,7 @@ const A={
   S.tPast.unshift({who:c.who,day:c.day,dur:c.dur,topics:tc.learned.length?tc.learned.slice():c.topics,next:tc.next.trim(),msg:tc.msg});
   S.note={date:md(c.day),text:tc.msg||'오늘 수업 수고 많으셨어요!',next:tc.next.trim()};
   tc.learned.forEach(k=>{if(S.skills[k]){S.skills[k].score=Math.max(S.skills[k].score,60);S.skills[k].last=`${md(c.day)} 수업`}});
-  if(c.rid)reqUpdate(c.rid,{fdone:true,comment:tc.next.trim()});S.tc=null;S._tc=null;S.hist=[];S.screen='thome';render();toast('코멘트를 남겼어요. 배움님 "지난 수업"에 보여요')}
+  if(c.rid){if(c.remote){tDoneAdd(c.rid);reqUpdate(c.rid,{fdone:true},true)}else reqUpdate(c.rid,{fdone:true,comment:tc.next.trim()},false)}   /* 코멘트 칸은 규칙에 없어서 진짜 요청에는 fdone 만 */S.tc=null;S._tc=null;S.hist=[];S.screen='thome';render();toast('코멘트를 남겼어요. 배움님 "지난 수업"에 보여요')}
 };
 
 document.addEventListener('click',e=>{const el=e.target.closest('[data-a]');if(!el||!document.getElementById('phone').contains(el))return;const f=A[el.dataset.a];if(f)f(el.dataset.v,el,e)});
@@ -1997,11 +2215,11 @@ function tutorDemo(){Object.assign(S.tu,{name:'김민지',school:'경희대학�
 function addMe(){const u=S.tu,d=DONGS[u.dong]||DONGS['영통동'];const me={id:'me',name:u.name||'새 프렌드',school:u.school,major:u.major+' '+(u.grade||''),age:+u.age||21,gender:u.gender,lat:d[0],lon:d[1],rad:u.rad,rating:5.0,reviews:0,price:15000,color:'#CDEBDD',approved:!!u.approved,
  intro:u.intro||'새로 온 프렌드예요. 천천히, 여러 번 알려드릴게요.',topics:u.topics.length?u.topics:['taxi'],tags:['새 프렌드'],days:[],wd:u.wdays.length?u.wdays.map(w=>W.indexOf(w)):[3,6],slots:u.times.length?u.times:['14:00'],full:{},revs:[]};
  const i=TUTORS.findIndex(t=>t.id==='me');i>=0?TUTORS.splice(i,1,me):TUTORS.push(me)}
-const BIND={'sr-id':v=>S.sr.id=v.trim(),'sr-pw':v=>S.sr.pw=v,'sr-pw2':v=>S.sr.pw2=v,'tu-id':v=>S.tu.id=v.trim(),'tu-pw':v=>S.tu.pw=v,'tu-pw2':v=>S.tu.pw2=v,'sr-memo':v=>S.sr.memo=v,'tc-next':v=>S._tc.next=v,'tc-msg':v=>S._tc.msg=v,'ds-etc':v=>S.tSheet.etc=v,'sr-phone':v=>{S.sr.phone=v;S.sms.ph=v},'sr-apt':v=>{S.sr.apt=v},'tu-apt':v=>{S.tu.apt=v},'sr-name':v=>S.sr.name=v||'배움님','sr-addr':v=>{S.sr.addr=v;S.sr.area=S.sr.dong+' '+v;setHome()},'tu-name':v=>S.tu.name=v,'sr-cphone':v=>S.sr.cphone=v,'sr-age':v=>{const n=parseInt(v.replace(/\D/g,''),10);if(!isNaN(n))S.sr.age=n},'tu-phone':v=>S.tu.phone=v,'tu-age':v=>S.tu.age=v,'tu-school':v=>S.tu.school=v,'tu-major':v=>S.tu.major=v,'tu-area':v=>S.tu.area=v,'tu-intro':v=>S.tu.intro=v,'tu-acct':v=>S.tu.acct=v.replace(/\D/g,''),'fb-txt':v=>S.fb.txt=v,
+const BIND={'sr-id':v=>S.sr.id=v.trim().toLowerCase(),'sr-pw':v=>S.sr.pw=v,'sr-pw2':v=>S.sr.pw2=v,'tu-id':v=>S.tu.id=v.trim().toLowerCase(),'tu-pw':v=>S.tu.pw=v,'tu-pw2':v=>S.tu.pw2=v,'sr-memo':v=>S.sr.memo=v,'tc-next':v=>S._tc.next=v,'tc-msg':v=>S._tc.msg=v,'ds-etc':v=>S.tSheet.etc=v,'sr-phone':v=>{S.sr.phone=v;S.sms.ph=v},'sr-apt':v=>{S.sr.apt=v},'tu-apt':v=>{S.tu.apt=v},'sr-name':v=>S.sr.name=v||'배움님','sr-addr':v=>{S.sr.addr=v;S.sr.area=S.sr.dong+' '+v;setHome()},'tu-name':v=>S.tu.name=v,'sr-cphone':v=>S.sr.cphone=v,'sr-age':v=>{const n=parseInt(v.replace(/\D/g,''),10);if(!isNaN(n))S.sr.age=n},'tu-phone':v=>S.tu.phone=v,'tu-age':v=>S.tu.age=v,'tu-school':v=>S.tu.school=v,'tu-major':v=>S.tu.major=v,'tu-area':v=>S.tu.area=v,'tu-intro':v=>S.tu.intro=v,'tu-acct':v=>S.tu.acct=v.replace(/\D/g,''),'fb-txt':v=>S.fb.txt=v,
  'tu-rad':v=>{const u=S.tu;u.rad=+v;const d=DONGS[u.dong];const tr={lat:d[0],lon:d[1],rad:u.rad};const n=SENIORS.filter(([la,lo])=>kmBetween(tr,{lat:la,lon:lo})<=u.rad).length;
   document.getElementById('tu-rad-out').textContent=`${u.dong}에서 반경 ${u.rad}km · 이 안에 사는 배움님 ${n}명`;document.getElementById('tu-map').innerHTML=mapSVG({tr})},
  'tx-q':v=>{S.tx.q=v;document.getElementById('tx-res').innerHTML=txResults()}};
-document.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.target.id==='lg-pw'||e.target.id==='lg-id')){e.preventDefault();A.login();return}const m=e.target.id&&e.target.id.match(/^(sr|tu)-q$/);if(m&&e.key==='Enter'){e.preventDefault();A['addr-search'](m[1])}});
+document.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.target.id==='lg-pw'||e.target.id==='lg-id')){e.preventDefault();A.login();return}if(e.key==='Enter'&&(e.target.id==='ad-pw'||e.target.id==='ad-id')){e.preventDefault();A['ad-login']();return}const m=e.target.id&&e.target.id.match(/^(sr|tu)-q$/);if(m&&e.key==='Enter'){e.preventDefault();A['addr-search'](m[1])}});
 document.addEventListener('input',e=>{const f=BIND[e.target.id];if(f){f(e.target.value);refreshNext()}});
 document.addEventListener('change',e=>{const id=e.target.id;
  if(id==='sr-age'){S.sr.age=Math.max(50,Math.min(110,S.sr.age||70));e.target.value=S.sr.age;return}
@@ -2022,8 +2240,6 @@ const seedBooking=()=>{S.tid='t1';S.day=TODAYN+4;S.slot='14:00';S.place='cafe';S
 render();
 </script>
 
-<script src="firebase-config.js"></script>
-<script src="payment-config.js"></script>
 <style>/* ===== 배프 v3 추가분 (v2 위에 덧붙임) ===== */
 body{word-break:keep-all;overflow-wrap:break-word}
 /* 작은 버튼 키우기 */
@@ -2148,6 +2364,9 @@ html.frame .sc-tag{display:none!important}
 .c-linkrow{display:flex;align-items:center;gap:.5em;padding:.7em 0 0;margin-top:.3em;border-top:1px dashed var(--line);font-size:.9em}
 .c-ask span{display:flex;flex-direction:column;gap:.35em}.c-ask input{font:inherit;padding:.6em .75em;border:1.5px solid var(--line);border-radius:12px;background:var(--paper);min-width:0}
 .c-linkrow>svg{width:1.2em;height:1.2em;flex:none;color:var(--blue)}.c-linkrow span{flex:1}
+/* ===== 'live' 모드: 시연 막대·시연 버튼·시연 계정 안내 숨기기 (app-config.js 의 BAEP_MODE) ===== */
+html.baep-live .demo-bar,html.baep-live .j-demo,html.baep-live .j-acc,html.baep-live .demo-only,html.baep-live .au-demo,html.baep-live [data-a="ad-enter"],html.baep-live [data-a="tu-sample"],html.baep-live [data-a="t-newreq"],html.baep-live [data-a="t-instreq"],html.baep-live [data-a="noti-demo"]:not(.sw){display:none!important}
+.card.login .err{margin:0}
 </style>
 <script>
 const SPLASH3D="<!DOCTYPE html>\n<html lang=\"ko\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>배프 스플래시 · 3D 디자인 시안 (밝은 버전)</title>\n<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n<link href=\"https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap\" rel=\"stylesheet\">\n<style>\n  *{box-sizing:border-box}\n  html,body{margin:0;height:100%;background:#E9ECF1;font-family:'Noto Sans KR',system-ui,sans-serif;-webkit-text-size-adjust:100%}\n  body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;min-height:100%}\n  .phone{position:relative;width:390px;height:844px;max-height:calc(100vh - 70px);border-radius:44px;overflow:hidden;\n    background:radial-gradient(110% 60% at 50% 36%,#FFFFFF 0%,#F7F8FA 55%,#EEF1F5 100%);\n    box-shadow:0 20px 50px rgba(25,31,40,.14),0 0 0 9px #fff,0 0 0 10px #D9DEE5}\n  #stage{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;-webkit-tap-highlight-color:transparent}\n  .play #stage{cursor:grab}\n  .copy{position:absolute;left:0;right:0;top:60%;display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;pointer-events:none;\n    opacity:0;transform:translateY(12px);transition:opacity .6s ease,transform .6s cubic-bezier(.2,.8,.2,1)}\n  .copy.on{opacity:1;transform:none}\n  .copy h1{margin:0;font-weight:800;font-size:64px;line-height:1;color:#191F28;letter-spacing:-2px}\n  .copy p{margin:0;font-size:20px;font-weight:500;color:#4E5968}\n  .foot{position:absolute;left:0;right:0;bottom:48px;text-align:center;font-size:16px;color:#8B95A1;pointer-events:none;opacity:0;transition:opacity .8s ease .25s}\n  .foot.on{opacity:1}\n  .bar{position:absolute;left:50%;bottom:30px;transform:translateX(-50%);width:64px;height:4px;border-radius:4px;background:#E5E8EB;overflow:hidden;opacity:0;transition:opacity .4s}\n  .bar.on{opacity:1}.bar i{display:block;height:100%;width:0;background:#1F5BD8;border-radius:4px}\n  .bar.on i{width:100%;transition:width var(--wait,1.2s) linear}\n  .fade{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .45s ease}\n  .fade.on{opacity:1}\n  .next{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:32px;text-align:center;background:#fff;color:#191F28}\n  .next.on{display:flex}.next b{font-size:22px}.next p{margin:0;color:#6B7684;font-size:15px;line-height:1.6}\n  .next button,.modes button{min-height:48px;padding:0 20px;border-radius:12px;border:1px solid #D1D6DB;background:#fff;color:#191F28;font:600 16px 'Noto Sans KR',sans-serif;cursor:pointer}\n  .next button.pri{background:#1F5BD8;border-color:#1F5BD8;color:#fff}\n  .modes{display:flex;gap:6px;background:#fff;padding:5px;border-radius:14px;box-shadow:0 1px 3px rgba(0,0,0,.08)}\n  .modes button{min-height:40px;border:none;font-size:14px;color:#6B7684}.modes button.on{background:#191F28;color:#fff}\n  .tip{position:absolute;top:20px;left:0;right:0;text-align:center;font-size:13px;color:#8B95A1;pointer-events:none;display:none}.play .tip{display:block}\n  .flat{position:absolute;left:50%;top:34%;transform:translate(-50%,-50%);width:250px;height:140px;display:none}\n  .flat.on{display:block}\n  .flat .fb,.flat .fy,.flat .syn,.flat .face,.flat .sh{transform-box:fill-box;transform-origin:center}\n  .flat.on .fb{animation:inL 1s cubic-bezier(.2,.8,.25,1) both}\n  .flat.on .fy{animation:inR 1s cubic-bezier(.2,.8,.25,1) both}\n  .flat.on .sh{animation:fin .8s ease .3s both}\n  .flat.on .syn{animation:fin .35s ease .95s both}\n  .flat.on .face{animation:popf .5s cubic-bezier(.3,1.6,.5,1) 1.1s both}\n  .flat.idle{animation:float 3s ease-in-out infinite}\n  @keyframes inL{from{transform:translateX(-170px) rotate(-200deg)}to{transform:none}}\n  @keyframes inR{from{transform:translateX(170px) rotate(200deg)}to{transform:none}}\n  @keyframes fin{from{opacity:0}}\n  @keyframes popf{from{opacity:0;transform:scale(.2)}}\n  @keyframes float{50%{transform:translate(-50%,calc(-50% - 5px))}}\n  @media (max-width:500px){body{display:block}.phone{width:100vw;height:100vh;max-height:none;border-radius:0;box-shadow:none}.modes{position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:5;opacity:.9}}\n  @media (prefers-reduced-motion:reduce){.copy,.bar i,.fade{transition:none}.flat *{animation:none!important}}\n</style>\n<style>\nhtml.embed,html.embed body{background:transparent!important;display:block;height:100%}\nhtml.embed .modes,html.embed .bar,html.embed .next,html.embed .fade,html.embed .foot,html.embed .tip{display:none!important}\nhtml.embed .phone{width:100%!important;height:100%!important;max-height:none!important;border-radius:0!important;box-shadow:none!important;background:transparent!important}\nhtml.embed .copy{top:60%;bottom:auto}\nhtml.embed .flat{top:34%}\nhtml.embed #stage{cursor:grab}\n</style>\n</head>\n<body>\n<div class=\"modes\" role=\"group\" aria-label=\"미리보기 종류\"><button type=\"button\" id=\"mApp\" class=\"on\">앱 첫 화면</button><button type=\"button\" id=\"mPlay\">놀이 버전 (소개 페이지용)</button></div>\n<div class=\"phone\" id=\"phone\">\n  <canvas id=\"stage\" aria-label=\"파란 구슬과 노란 구슬이 만나 겹친 부분에 웃는 얼굴이 생기는 배프 3D 로고\"></canvas>\n  <svg class=\"flat\" id=\"flat\" viewBox=\"0 0 250 150\" aria-hidden=\"true\"><defs><radialGradient id=\"gb\" cx=\"38%\" cy=\"32%\" r=\"70%\"><stop offset=\"0\" stop-color=\"#6FA1F2\"/><stop offset=\"1\" stop-color=\"#2F72E6\"/></radialGradient><radialGradient id=\"gy\" cx=\"38%\" cy=\"32%\" r=\"70%\"><stop offset=\"0\" stop-color=\"#FFD25E\"/><stop offset=\"1\" stop-color=\"#FFB21E\"/></radialGradient><radialGradient id=\"gs\" cx=\"50%\" cy=\"50%\" r=\"60%\"><stop offset=\"0\" stop-color=\"#191F28\" stop-opacity=\".16\"/><stop offset=\"1\" stop-color=\"#191F28\" stop-opacity=\"0\"/></radialGradient><clipPath id=\"cb\"><circle cx=\"97\" cy=\"68\" r=\"58\"/></clipPath></defs>\n<ellipse class=\"sh\" cx=\"125\" cy=\"136\" rx=\"95\" ry=\"9\" fill=\"url(#gs)\"/>\n<g class=\"fb\"><circle cx=\"97\" cy=\"68\" r=\"58\" fill=\"url(#gb)\"/></g>\n<g class=\"fy\"><circle cx=\"153\" cy=\"68\" r=\"58\" fill=\"url(#gy)\"/></g>\n<g class=\"syn\"><circle cx=\"153\" cy=\"68\" r=\"58\" fill=\"#35B874\" clip-path=\"url(#cb)\"/></g>\n<g class=\"face\"><circle cx=\"115\" cy=\"64\" r=\"4.3\" fill=\"#1E2833\"/><circle cx=\"135\" cy=\"64\" r=\"4.3\" fill=\"#1E2833\"/><path d=\"M116.5 75q4.25 5 8.5 0q4.25 5 8.5 0\" fill=\"none\" stroke=\"#1E2833\" stroke-width=\"2.3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><ellipse cx=\"106\" cy=\"76\" rx=\"6\" ry=\"3.5\" fill=\"#FF8C96\" opacity=\".45\"/><ellipse cx=\"144\" cy=\"76\" rx=\"6\" ry=\"3.5\" fill=\"#FF8C96\" opacity=\".45\"/></g></svg>\n  <div class=\"tip\">끌어서 돌리기 · 한 번 누르면 깜짝 · 두 번 누르면 통통</div>\n  <div class=\"copy\" id=\"copy\"><h1>배프</h1><p>배움을 함께하는 프렌드</p></div>\n  <div class=\"foot\" id=\"foot\">어르신과 동네 대학생, 함께 배우는 시간</div>\n  <div class=\"bar\" id=\"bar\"><i></i></div>\n  <div class=\"fade\" id=\"fade\"></div>\n  <div class=\"next\" id=\"next\"><b>여기서 소개 화면으로 넘어가요</b><p>실제 앱에서는 이 자리에 소개 → 로그인 화면이 이어져요.<br>(미리보기라 여기서 멈췄어요)</p><button type=\"button\" class=\"pri\" id=\"again\">처음부터 다시 보기</button></div>\n</div>\n\n<script>document.documentElement.classList.add(\"embed\");<\/script>\n<script>\n/* 미리보기 모드 · 자동 넘어가기 · 3D 실패 시 평면 그림 */\nwindow.BP=(function(){\n  const phone=document.getElementById('phone'),copy=document.getElementById('copy'),foot=document.getElementById('foot'),bar=document.getElementById('bar'),fade=document.getElementById('fade'),next=document.getElementById('next');\n  const o={play:location.hash==='#play',listeners:[]};\n  function setMode(p){o.play=p;phone.classList.toggle('play',p);document.getElementById('mApp').classList.toggle('on',!p);document.getElementById('mPlay').classList.toggle('on',p);history.replaceState(null,'',p?'#play':'#');o.restart()}\n  o.showText=()=>{copy.classList.add('on');foot.classList.add('on')};\n  o.armNext=()=>{return;if(o.play||o.armed)return;o.armed=true;bar.style.setProperty('--wait','1.1s');bar.classList.add('on');o.timer=setTimeout(o.goNext,1150)};\n  o.goNext=()=>{return;if(o.play||o.gone)return;o.gone=true;clearTimeout(o.timer);fade.classList.add('on');setTimeout(()=>{next.classList.add('on');try{parent.postMessage({baepu:'splash-done'},'*')}catch(e){}},450)};\n  o.restart=()=>{clearTimeout(o.timer);o.armed=o.gone=false;[copy,foot,bar,fade,next].forEach(e=>e.classList.remove('on'));o.listeners.forEach(f=>f())};\n  document.getElementById('mApp').onclick=()=>setMode(false);\n  document.getElementById('mPlay').onclick=()=>setMode(true);\n  document.getElementById('again').onclick=()=>o.restart();\n  phone.classList.toggle('play',o.play);document.getElementById('mApp').classList.toggle('on',!o.play);document.getElementById('mPlay').classList.toggle('on',o.play);\n  o.flat=()=>{const f=document.getElementById('flat');document.getElementById('stage').style.display='none';const run=()=>{f.classList.remove('on');void f.offsetWidth;f.classList.add('on');setTimeout(o.showText,1500);setTimeout(o.armNext,1900)};o.listeners.push(run);run();phone.addEventListener('click',e=>{if(!e.target.closest('button'))o.goNext()})};\n  return o})();\n<\/script>\n<script src=\"https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js\"><\/script>\n<script>\n(function(){\n  if(!window.THREE){BP.flat();return;}\n  const phone=document.getElementById('phone'), canvas=document.getElementById('stage');\n  const copy=document.getElementById('copy'), foot=document.getElementById('foot');\n  const reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;\n\n  // ---------- renderer / scene ----------\n  const renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true});\n  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,3));\n  renderer.outputEncoding=THREE.sRGBEncoding;\n  renderer.toneMapping=THREE.ACESFilmicToneMapping;\n  renderer.toneMappingExposure=1.0;\n  const scene=new THREE.Scene();\n  const camera=new THREE.PerspectiveCamera(30,1,0.1,100);\n  camera.position.set(0,0.35,13.5);\n  camera.lookAt(0,0.15,0);\n\n  // soft studio environment for glossy reflections (kept dim so colours stay rich)\n  (function(){\n    const envScene=new THREE.Scene();\n    const c=document.createElement('canvas');c.width=16;c.height=256;\n    const x=c.getContext('2d');const gr=x.createLinearGradient(0,0,0,256);\n    gr.addColorStop(0,'#ffffff');gr.addColorStop(.35,'#f4f6f9');gr.addColorStop(.7,'#dfe4ec');gr.addColorStop(1,'#cfd6e0');\n    x.fillStyle=gr;x.fillRect(0,0,16,256);\n    const tex=new THREE.CanvasTexture(c);tex.encoding=THREE.sRGBEncoding;\n    envScene.add(new THREE.Mesh(new THREE.SphereGeometry(10,32,16),new THREE.MeshBasicMaterial({map:tex,side:THREE.BackSide})));\n    const card=new THREE.Mesh(new THREE.PlaneGeometry(5,2.4),new THREE.MeshBasicMaterial({color:0xffffff}));\n    card.position.set(-4,5,3);card.lookAt(0,0,0);envScene.add(card);\n    const strip=new THREE.Mesh(new THREE.PlaneGeometry(1.2,6),new THREE.MeshBasicMaterial({color:0xf2f4f7}));\n    strip.position.set(5,1,2);strip.lookAt(0,0,0);envScene.add(strip);\n    const pm=new THREE.PMREMGenerator(renderer);\n    scene.environment=pm.fromScene(envScene,0.04).texture;\n  })();\n  scene.add(new THREE.HemisphereLight(0xffffff,0xb8c2d0,0.22));\n  const key=new THREE.DirectionalLight(0xffffff,1.25);key.position.set(-3,4,5);scene.add(key);\n  const rim=new THREE.DirectionalLight(0xffffff,0.3);rim.position.set(3,1.5,-4);scene.add(rim);\n  const warm=new THREE.PointLight(0xffe7c4,0.15,20);warm.position.set(3,-1,4);scene.add(warm);\n  const sparkle=new THREE.PointLight(0xffffff,0.0,12);sparkle.position.set(-1.6,2.6,4.2);scene.add(sparkle);\n\n  // ---------- spheres: two different colours, a third \"synergy\" colour where they overlap ----------\n  const R=1, GAP=0.44, Y0=0.75;\n  const BLUE=0x2F72E6, YELLOW=0xFFB21E, SYN=new THREE.Color(0x35B874);   // sky blue + sunny yellow -> fresh green\n  const root=new THREE.Group();scene.add(root);\n  const geo=new THREE.SphereGeometry(R,128,96);\n\n  // Each sphere = an opaque body + a \"glass\" patch. Where the view ray also passes through the partner sphere,\n  // the front-most surface becomes see-through, so the overlap looks translucent and shows the green \"synergy\" inside.\n  function sphereMaterial(hex,glass,uOther){\n    const m=new THREE.MeshPhysicalMaterial({color:hex,roughness:glass?.25:.45,metalness:0,clearcoat:.35,clearcoatRoughness:glass?.2:.3,\n      envMapIntensity:glass?.22:.15,transparent:glass,depthWrite:!glass});\n    const rimCol=hex===BLUE?new THREE.Color(0.78,0.92,1.0):new THREE.Color(1.0,0.95,0.72);\n    m.customProgramCacheKey=()=>glass?'baepu-glass':'baepu-solid';\n    m.onBeforeCompile=sh=>{\n      sh.uniforms.uOther=uOther; sh.uniforms.uR={value:R}; sh.uniforms.uSyn={value:SYN}; sh.uniforms.uRim={value:rimCol};\n      sh.vertexShader=sh.vertexShader.replace('#include <common>','#include <common>\\nvarying vec3 vWPos;')\n        .replace('#include <project_vertex>','#include <project_vertex>\\nvWPos=(modelMatrix*vec4(transformed,1.0)).xyz;');\n      sh.fragmentShader=sh.fragmentShader.replace('#include <common>','#include <common>\\nvarying vec3 vWPos;\\nuniform vec3 uOther;\\nuniform float uR;\\nuniform vec3 uSyn;\\nuniform vec3 uRim;')\n        .replace('#include <color_fragment>',`#include <color_fragment>\n          vec3 rd=normalize(vWPos-cameraPosition);\n          vec3 oc=cameraPosition-uOther;\n          float bq=dot(oc,rd), disc=bq*bq-(dot(oc,oc)-uR*uR);\n          float tThis=length(vWPos-cameraPosition);\n          float tEnter=disc>0.0?(-bq-sqrt(max(disc,0.0))):1e9;\n          float inLens=disc>0.0?1.0:0.0;\n          float isFront=(inLens>0.5&&tThis<tEnter)?1.0:0.0;\n          float isInner=(inLens>0.5&&tThis>=tEnter)?1.0:0.0;\n          float edge=smoothstep(0.0,0.14,disc);\n          ${glass?\n            'if(isFront<0.5) discard;\\n diffuseColor.rgb=mix(diffuseColor.rgb,uSyn,0.35*edge);\\n diffuseColor.a=mix(1.0,0.42,edge);':\n            'if(isFront>0.5&&edge>0.6) discard;\\n diffuseColor.rgb=mix(diffuseColor.rgb,uSyn,isInner*0.85*smoothstep(0.0,0.08,disc));'}\n          float synGlow=isInner;`)\n        .replace('#include <emissivemap_fragment>','#include <emissivemap_fragment>\\ntotalEmissiveRadiance+=uSyn*0.25*synGlow;')\n        .replace(/gl_FragColor\\s*=\\s*vec4\\(\\s*outgoingLight,\\s*diffuseColor\\.a\\s*\\);/,\n          `float fres=pow(1.0-clamp(dot(normalize(normal),normalize(vViewPosition)),0.0,1.0),2.6);\n          outgoingLight+=uRim*fres*0.1;                              // soft light rim, like a lit jelly ball\n          outgoingLight+=diffuseColor.rgb*(1.0-fres)*0.05;            // gentle inner glow\n          gl_FragColor = vec4( outgoingLight, diffuseColor.a );`);\n    };\n    return m;\n  }\n  const uBlueOther={value:new THREE.Vector3()}, uYelOther={value:new THREE.Vector3()};\n  const bluePivot=new THREE.Group(), yelPivot=new THREE.Group();\n  const blue=new THREE.Group(), yel=new THREE.Group();\n  bluePivot.add(blue);yelPivot.add(yel);root.add(bluePivot,yelPivot);\n  blue.add(new THREE.Mesh(geo,sphereMaterial(BLUE,false,uBlueOther)));\n  yel.add(new THREE.Mesh(geo,sphereMaterial(YELLOW,false,uYelOther)));\n  const blueGlass=new THREE.Mesh(geo,sphereMaterial(BLUE,true,uBlueOther)); blueGlass.renderOrder=5; blue.add(blueGlass);\n  const yelGlass=new THREE.Mesh(geo,sphereMaterial(YELLOW,true,uYelOther)); yelGlass.renderOrder=5; yel.add(yelGlass);\n\n  // soft contact shadows\n  function blobTex(){const c=document.createElement('canvas');c.width=c.height=128;const x=c.getContext('2d');\n    const g=x.createRadialGradient(64,64,4,64,64,62);g.addColorStop(0,'rgba(25,31,40,.35)');g.addColorStop(1,'rgba(25,31,40,0)');\n    x.fillStyle=g;x.fillRect(0,0,128,128);return new THREE.CanvasTexture(c);}\n  const bt=blobTex();\n  function shadow(){const m=new THREE.Mesh(new THREE.PlaneGeometry(2.2,2.2),new THREE.MeshBasicMaterial({map:bt,transparent:true,depthWrite:false}));\n    m.rotation.x=-Math.PI/2;m.position.y=Y0-R-0.02;scene.add(m);return m;}\n  const shB=shadow(), shY=shadow();\n\n  // ---------- face: sits on the front surface of the overlap (centred at x=0) ----------\n  const face=new THREE.Group();root.add(face);\n  face.position.set(0,Y0,0);\n  const ink=new THREE.MeshPhysicalMaterial({color:0x1E2833,roughness:.25,clearcoat:1,clearcoatRoughness:.1});\n  const white=new THREE.MeshBasicMaterial({color:0xffffff});\n  function frontZ(x,y){ // both spheres at z=0 -> front-most surface\n    const zb=Math.sqrt(Math.max(0,R*R-(x+GAP)*(x+GAP)-y*y));\n    const zy=Math.sqrt(Math.max(0,R*R-(x-GAP)*(x-GAP)-y*y));\n    return Math.max(zb,zy);\n  }\n  function normalAt(x,y){const cx=x<0?GAP:-GAP; // the surface in front at x<0 belongs to the yellow sphere's partner? pick the one giving frontZ\n    const zb=Math.sqrt(Math.max(0,R*R-(x+GAP)*(x+GAP)-y*y)), zy=Math.sqrt(Math.max(0,R*R-(x-GAP)*(x-GAP)-y*y));\n    return zb>=zy?new THREE.Vector3(x+GAP,y,zb).normalize():new THREE.Vector3(x-GAP,y,zy).normalize();}\n  function stick(obj,x,y,lift){const z=frontZ(x,y)+(lift||0.012);obj.position.set(x,y,z);\n    obj.lookAt(new THREE.Vector3(x,y,z).add(normalAt(x,y)));return obj;}\n\n  // ---- kaomoji-style face: thin even strokes + dot eyes, drawn onto the sphere surface ----\n  const STROKE=.024;\n  function onSurf(pts,lift){return pts.map(p=>new THREE.Vector3(p[0],p[1],frontZ(p[0],p[1])+(lift||0.022)));}\n  function stroke(pts,closed){const curve=new THREE.CatmullRomCurve3(onSurf(pts),!!closed,'catmullrom',0.2);\n    return new THREE.Mesh(new THREE.TubeGeometry(curve,64,STROKE,10,!!closed),ink);}\n  function arc(cx,cy,r,a0,a1,n){const out=[];for(let i=0;i<=n;i++){const a=a0+(a1-a0)*i/n;out.push([cx+r*Math.cos(a),cy+r*Math.sin(a)]);}return out;}\n  function dot(x,y,r){const m=new THREE.Mesh(new THREE.SphereGeometry(r,24,12),ink);m.scale.set(1,1,.45);stick(m,x,y,0.006);return m;}\n  const EX=0.27, EY=0.1, MY=-0.06;\n  const expr={};\n  function group(name,parts){const g=new THREE.Group();parts.forEach(p=>g.add(p));g.visible=false;face.add(g);expr[name]=g;return g;}\n  // (•ω•) eyes\n  group('eyesDot',[dot(-EX,EY,.068),dot(EX,EY,.068)]);\n  // (∩ ∩) happy closed eyes for blinking\n  group('eyesArc',[stroke(arc(-EX,EY-0.035,.07,Math.PI*0.05,Math.PI*0.95,16)),stroke(arc(EX,EY-0.035,.07,Math.PI*0.05,Math.PI*0.95,16))]);\n  // (°▽°) ring eyes\n  group('eyesRing',[stroke(arc(-EX,EY+0.01,.056,0,Math.PI*2,28),true),stroke(arc(EX,EY+0.01,.056,0,Math.PI*2,28),true)]);\n  // (>o<) squeezed eyes\n  group('eyesSqueeze',[stroke([[-EX-0.063,EY+0.056],[-EX+0.05,EY],[-EX-0.063,EY-0.056]]),stroke([[EX+0.063,EY+0.056],[EX-0.05,EY],[EX+0.063,EY-0.056]])]);\n  // ω mouth\n  const w=[];for(let i=0;i<=32;i++){const t=i/32;w.push([-0.1+0.2*t,MY-0.045*Math.abs(Math.sin(Math.PI*2*t))]);}\n  group('mouthW',[stroke(w)]);\n  // ▽ mouth\n  group('mouthTri',[stroke([[-0.07,MY+0.008],[0.07,MY+0.008],[0,MY-0.092]],true)]);\n  // o mouth\n  group('mouthO',[stroke(arc(0,MY-0.035,.042,0,Math.PI*2,24),true)]);\n  function setFace(eyes,mouth){['eyesDot','eyesArc','eyesRing','eyesSqueeze'].forEach(k=>expr[k].visible=(k===eyes));\n    ['mouthW','mouthTri','mouthO'].forEach(k=>expr[k].visible=(k===mouth));}\n  setFace('eyesDot','mouthW');\n\n  // blush: soft radial gradient, stronger colour\n  function blushTex(){const c=document.createElement('canvas');c.width=c.height=128;const x=c.getContext('2d');\n    const g=x.createRadialGradient(64,64,2,64,64,62);g.addColorStop(0,'rgba(255,130,140,.55)');g.addColorStop(.55,'rgba(255,140,150,.3)');g.addColorStop(1,'rgba(255,130,140,0)');\n    x.fillStyle=g;x.fillRect(0,0,128,128);const t=new THREE.CanvasTexture(c);t.encoding=THREE.sRGBEncoding;return t;}\n  const blushMat=new THREE.MeshBasicMaterial({map:blushTex(),transparent:true,depthWrite:false,toneMapped:false});\n  const cheeks=[];\n  [-0.37,0.37].forEach(cx=>{const c=new THREE.Mesh(new THREE.PlaneGeometry(.28,.18),blushMat);stick(c,cx,-0.04,0.016);face.add(c);cheeks.push(c);});\n\n  // ---------- resize ----------\n  function resize(){const w=phone.clientWidth,h=phone.clientHeight;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();}\n  window.addEventListener('resize',resize);resize();\n\n  // ---------- input: drag to orbit, tap = surprise, double tap = bounce away & back ----------\n  let tx=0,ty=0,cx=0,cy=0,drag=null,moved=false,lastTap=0,tapTimer=null;\n  let introT0=performance.now(), surpriseT0=-99, bounceT0=-99;\n  const now=()=>performance.now()/1000;\n  canvas.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,tx,ty,t:performance.now()};moved=false;canvas.setPointerCapture(e.pointerId);});\n  canvas.addEventListener('pointermove',e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;\n    if(Math.abs(dx)+Math.abs(dy)>8)moved=true;\n    if(moved){tx=Math.max(-.7,Math.min(.7,drag.tx+dx/220));ty=Math.max(-.35,Math.min(.35,drag.ty+dy/300));}});\n  canvas.addEventListener('pointerup',()=>{\n    if(drag&&!moved&&performance.now()-drag.t<350){\n      const t=performance.now();\n      if(t-lastTap<300){clearTimeout(tapTimer);lastTap=0;bounceT0=now();surpriseT0=-99;}\n      else{lastTap=t;tapTimer=setTimeout(()=>{if(now()-bounceT0>1.7)surpriseT0=now();},280);}\n    }\n    drag=null;});\n  canvas.addEventListener('pointercancel',()=>{drag=null;});\n  function restart(){introT0=performance.now();surpriseT0=-99;bounceT0=-99;copy.classList.remove('on');foot.classList.remove('on');textShown=false;}\n  BP.listeners.push(restart);\n\n  // ---------- timeline ----------\n  const ease=t=>1-Math.pow(1-t,3);\n  const backOut=t=>{const s=1.9;t-=1;return t*t*((s+1)*t+s)+1;};\n  const clamp=t=>Math.max(0,Math.min(1,t));\n  let textShown=false;\n  const tmp=new THREE.Vector3();\n\n  function frame(ms){\n    const T=ms/1000, t=reduce?10:(ms-introT0)/1000;\n\n    // intro roll-in\n    const a=ease(clamp(t/1.3));\n    let x=GAP+(3.4-GAP)*(1-a);\n    let hop=Math.abs(Math.sin(a*Math.PI*2))*0.35*(1-a);\n\n    // double tap: hop backwards twice, then roll back in\n    const b=clamp((T-bounceT0)/1.6), bouncing=b>0&&b<1;\n    if(bouncing){\n      const out=Math.sin(Math.min(1,b/0.75)*Math.PI);           // away and back\n      x+=out*1.05;\n      hop+=Math.abs(Math.sin(b*Math.PI*3))*0.42*(1-b*0.6);       // boing, boing\n    }\n    // single tap: little jump of surprise\n    const s=clamp((T-surpriseT0)/1.3), surprised=s>0&&s<1;\n    if(surprised)hop+=Math.sin(Math.min(1,s*3.2)*Math.PI)*0.18;\n\n    bluePivot.position.set(-x,Y0+hop,0);\n    yelPivot.position.set(x,Y0+hop,0);\n    blue.rotation.z=-(1-a)*4.2; yel.rotation.z=(1-a)*4.2;\n\n    // squash on contact (intro and when coming back from the bounce)\n    const sq1=Math.sin(clamp((t-1.2)/0.5)*Math.PI)*(1-clamp((t-1.2)/0.5)*0.4);\n    const sq2=bouncing?Math.sin(clamp((b-0.7)/0.25)*Math.PI)*0.8:0;\n    const sq=Math.max(sq1,sq2);\n    bluePivot.scale.set(1-0.07*sq,1+0.06*sq,1);yelPivot.scale.set(1-0.07*sq,1+0.06*sq,1);\n\n    // overlap shader needs each sphere's partner centre\n    yelPivot.getWorldPosition(tmp);uBlueOther.value.copy(tmp);\n    bluePivot.getWorldPosition(tmp);uYelOther.value.copy(tmp);\n\n    // face: pops in after the meeting, hides while apart, follows the hop\n    let fs=t<1.6?0:backOut(clamp((t-1.6)/0.5));\n    if(bouncing){fs=b<0.12?1-b/0.12:(b<0.78?0:backOut(clamp((b-0.78)/0.22)));}\n    face.scale.setScalar(Math.max(0.0001,fs));\n    face.position.y=Y0+hop;\n\n    // expressions (kaomoji)\n    const blinkPhase=((t-2.4)%3.4+3.4)%3.4, blink=t>2.4&&blinkPhase<0.22;\n    if(bouncing&&(b<0.12||b>0.78)) setFace('eyesSqueeze','mouthO');        // (>o<) boing!\n    else if(surprised) setFace('eyesRing','mouthTri');                      // (°▽°) !\n    else if(blink) setFace('eyesArc','mouthW');                             // (∩ω∩)\n    else setFace('eyesDot','mouthW');                                       // (•ω•)\n    const blushOn=surprised?1.3:1;cheeks.forEach(c=>c.scale.setScalar(blushOn));\n\n    // text\n    if(t>2.1&&!textShown){textShown=true;BP.showText();}\n    if(t>2.3)BP.armNext();\n\n    // idle float + drag orbit\n    const idle=t>2.2?Math.sin((t-2.2)*1.6)*0.06:0;\n    root.position.y=idle;\n    cx+=(tx-cx)*0.08;cy+=(ty-cy)*0.08;\n    if(!drag){tx*=0.985;ty*=0.985;}\n    root.rotation.y=cx+(t>2.2?Math.sin((t-2.2)*0.7)*0.05:0);\n    root.rotation.x=cy*0.6;\n\n    // shadows\n    const k=Math.max(0.35,1-(hop+idle)*0.6);\n    shB.position.x=-x;shY.position.x=x;\n    shB.scale.set(k,.55*k,1);shY.scale.set(k,.55*k,1);\n    shB.material.opacity=shY.material.opacity=Math.min(1,a*1.4)*(0.85*k);\n\n    renderer.render(scene,camera);\n    requestAnimationFrame(frame);\n  }\n  requestAnimationFrame(frame);\n})();\n<\/script>\n</body>\n</html>\n";
@@ -2161,25 +2380,13 @@ const MODE=Q.has('s')?'frame':(window.__BOARD?'board':'app');const KIOSK=!!windo
 window.__V3MODE=MODE;
 const phone=()=>document.getElementById('phone');
 
-/* ---------- 0. 계정·저장 ---------- */
-ACCOUNTS.baeum01=ACCOUNTS.baeum;ACCOUNTS.fr01=ACCOUNTS.friend;
-const LS='baep3_acc_';
+/* ---------- 0. 계정·저장 ----------
+   로그인·저장소는 위쪽 '앱 모드 · 로그인 · 저장소' 부분에 있어요 (서버 로그인 + Firestore, 시연 계정은 이 기기 안에서만) */
+if(ACCOUNTS.baeum){ACCOUNTS.baeum01=ACCOUNTS.baeum;ACCOUNTS.fr01=ACCOUNTS.friend}
 const lsGet=k=>{if(MODE==='frame')return null;try{return localStorage.getItem(k)}catch(e){return null}};
 const lsSet=(k,v)=>{if(MODE==='frame')return true;try{localStorage.setItem(k,v);return true}catch(e){return false}};
-/* Firebase: firebase-config.js에 설정이 있으면 Claude 저장소 대신 Firebase를 써요 (깃허브·Claude 링크가 같은 데이터를 봄) */
-const FB=window.FIREBASE_CONFIG&&window.FIREBASE_CONFIG.projectId?window.FIREBASE_CONFIG:null;
-window.__BAEP_STORE=FB?'firebase':'claude-or-local';
-if(FB&&MODE!=='frame'){let _fp=null;const V='10.12.2';const _cdb=getDB;
- const js=src=>new Promise((ok,no)=>{const t=document.createElement('script');t.src=src;t.onload=ok;t.onerror=no;document.head.appendChild(t)});
- getDB=()=>{if(!_fp)_fp=(async()=>{try{await js(`https://www.gstatic.com/firebasejs/${V}/firebase-app-compat.js`);await js(`https://www.gstatic.com/firebasejs/${V}/firebase-firestore-compat.js`);if(!firebase.apps.length)firebase.initializeApp(FB);return firebase.firestore()}catch(e){console.warn('Firebase 연결 실패 → Claude 저장소로',e);window.__BAEP_STORE='claude-or-local';return await _cdb()}})();return Promise.race([_fp,new Promise(r=>setTimeout(()=>r(null),9000))])};
- setTimeout(getDB,0)}
-/* 비밀번호는 그대로 저장하지 않고 바꿔서(해시) 저장 */
-const HASH=async t=>{try{const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode('baep:'+t));return 'h:'+[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}catch(e){return t}};
-const _fa=findAcct,_sa=saveAcct;
-findAcct=async id=>{let a=await _fa(id);if(!a){const j=lsGet(LS+id);if(j){try{a=JSON.parse(j);ACCOUNTS[id]=a}catch(e){}}}
- if(a&&String(a.pw||'').startsWith('h:')&&S.login&&S.login.busy){const v=(document.getElementById('lg-pw')||{}).value||'';if(v&&await HASH(v)===a.pw)return{...a,pw:v}}
- return a||null};
-saveAcct=async(id,a)=>{if(a&&!a.demo&&a.pw&&!String(a.pw).startsWith('h:'))a={...a,pw:await HASH(a.pw)};const ok=await _sa(id,a);if(ok)return true;ACCOUNTS[id]=a;return lsSet(LS+id,JSON.stringify(a))};
+window.__BAEP_STORE=NET?'firebase':'local';
+if(NET)setTimeout(fbReady,0);   /* Firebase 미리 불러오기 (새로고침 때 로그인 복원용) */
 let SEEN={};try{SEEN=JSON.parse(lsGet('baep3_seen')||'{}')||{}}catch(e){}
 const seen=k=>{SEEN[k]=1;lsSet('baep3_seen',JSON.stringify(SEEN))};
 
@@ -2227,8 +2434,13 @@ SC.place=()=>{let h=_place();
  if(!S.want)h=h.replace('<footer class="cta">',`<footer class="cta"><p class="small" style="margin:0;text-align:center">⚡ 프렌드가 열어둔 시간이라 <b>바로 수락</b>돼요. 다음은 결제예요</p>`).replace('>예약 요청 보내기<','>바로 예약하기<');
  return h};
 const _send=A['send-req'];
-A['send-req']=()=>{const inst=!S.want;_send();
- if(inst&&S.req&&S.req.st==='wait'){S.req.inst=true;if(S.req.rid)reqUpdate(S.req.rid,{st:'ok',inst:true,updated:Date.now()});reqAccept();S.accepted=true;S.hist=['home'];S.screen='pay';render();
+A['send-req']=async()=>{const inst=!S.want;const ok=await _send({inst});if(!ok)return;
+ /* 열어둔 시간: 바로 결제로. 진짜 요청은 프렌드 앱이 '수락'으로 바꿔요(보낸 사람은 수락으로 못 바꿔요), 시연은 이 기기에서 바로 수락 */
+ if(inst&&S.req&&S.req.st==='wait'){S.req.inst=true;
+  if(S.req.remote){const ok2=await reqUpdate(S.req.rid,{st:'ok',inst:true,updated:Date.now()},true);
+   if(!ok2){toast('열어둔 시간이 바뀌었어요. 프렌드가 확인하면 알려드릴게요',3400);go('wait');return}}
+  else if(S.req.rid)reqUpdate(S.req.rid,{st:'ok',inst:true,updated:Date.now()},false);
+  reqAccept();S.accepted=true;S.hist=['home'];S.screen='pay';render();
   /* 열어둔 시간은 '요청 수락'이 아니라 바로 예약이라 알림 문구를 맞춤 */
   noti('바로 예약',tutor(S.req.tid).name+' 프렌드가 열어둔 시간이라 바로 잡혔어요. 결제하면 수업이 확정돼요')}};
 /* 홈 카드: 바로 수락된 요청 표시 */
@@ -2484,7 +2696,7 @@ A['c-demo']=()=>{A.demo();S.sr.byChild=true;S.sr.cphone=S.sr.cphone||'010-8765-4
 /* 자녀 화면에 있을 때는 부모님 휴대폰용 알림 배너를 띄우지 않음 (알림함에는 쌓임) */
 const _noti=noti;noti=function(t,b){_noti(t,b);if(String(S.screen).startsWith('c_')){const n=document.getElementById('noti');if(n)n.hidden=true}};
 const _scPay=SC.pay;
-SC.pay=()=>{if(!S.sr.byChild)return _scPay();const t=tutor(S.tid);const kid=S.payer==='child';
+SC.pay=()=>{if(!S.sr.byChild||!DEMO_MODE)return _scPay();   /* '자녀에게 부탁'(문자 링크 결제)은 아직 시연 기능이라 'live' 에서는 숨겨요 */const t=tutor(S.tid);const kid=S.payer==='child';
  const seg=`<div class="sec">누가 결제할까요?</div><div class="seg"><button class="${kid?'':'on'}" data-a="payer" data-v="self">제가 할게요</button><button class="${kid?'on':''}" data-a="payer" data-v="child">자녀에게 부탁</button></div>`;
  if(!kid)return _scPay().replace('<div class="sec">결제 방법</div>',seg+'<div class="sec">결제 방법</div>');
  const h=_scPay();const top=h.slice(0,h.indexOf('<div class="sec">결제 방법</div>'));
@@ -2501,83 +2713,110 @@ A['child-link']=()=>{if(S.sr.byChild){S.sr.byChild=false;S.child.linked=false;if
  S.sr.byChild=true;S.child.linked=false;if(S.sr.cphone){S.child.sent=true;render();toast('자녀분께 연결 문자를 보냈어요')}else{S.child.sent=false;render();setTimeout(()=>document.getElementById('sr-cphone')?.focus(),50)}};
 A['c-send-link']=()=>{const el=document.getElementById('sr-cphone');const ph=((el&&el.value)||S.sr.cphone||'').trim();if(!/^01\d-?\d{3,4}-?\d{4}$/.test(ph)){toast('휴대폰 번호를 010-0000-0000처럼 적어주세요');return}S.sr.cphone=ph;S.child.sent=true;render();toast('자녀분께 연결 문자를 보냈어요')};
 const _scMine=SC.mine;
-SC.mine=()=>{const h=_scMine();if(!S.sr.byChild)return h;
+SC.mine=()=>{const h=_scMine();if(!S.sr.byChild||!DEMO_MODE)return h;
  const row=!S.child.linked&&!S.child.sent?`<div class="c-linkrow c-ask"><span><b>자녀분 휴대폰 번호</b><input id="sr-cphone" inputmode="tel" value="${esc(S.sr.cphone||'')}" placeholder="010-0000-0000" aria-label="자녀분 휴대폰 번호"></span><button class="mini" data-a="c-send-link" style="background:var(--blue);color:#fff">연결 문자 보내기</button></div>`:`<div class="c-linkrow">${S.child.linked?`${I('check')}<span><b>연결됨</b> · ${esc(cPh())}</span><button class="mini" data-a="c-open" data-v="c_home">자녀 화면 보기</button>`:`${I('msg')}<span><b>연결 문자를 보냈어요</b> · ${esc(cPh())}<br><small class="muted">자녀분이 확인하면 연결돼요</small></span><button class="mini" data-a="c-open" data-v="c_link">자녀 휴대폰 보기</button>`}</div>`;
  return h.replace('aria-label="자녀 연결"></button></div></div>','aria-label="자녀 연결"></button></div>'+row+'</div>')};
 
 /* ---------- 8. 실제 결제창 (토스페이먼츠 결제위젯) ----------
    설정은 payment-config.js 의 window.BAEP_PAY 를 따라요.
-   mode 'test' : 테스트 키로 진짜 결제창(카카오페이·토스페이·네이버페이·카드 등)을 띄우고 승인까지 해요. 돈은 나가지 않아요.
-   mode 'live' : 실제 결제. confirmUrl(승인 서버)이 꼭 있어야 하고, 시크릿 키는 서버에만 둬요.
-   mode 'off'  : 예전 연습 결제창만 써요.
-   간편결제 앱으로 넘어갔다가 이 주소로 돌아오기 때문에, 떠나기 전 화면 상태를 잠깐 저장해 둬요. */
-const PAYC=Object.assign({mode:'test',clientKey:'test_gck_docs_Ovk5rk1EwkEbP0W43n07xlzm',testSecretKey:'test_gsk_docs_OaPz8L5KdmQXkzRz3y47BMw6',confirmUrl:''},window.BAEP_PAY||{});
-if(PAYC.mode==='live')PAYC.testSecretKey='';/* 라이브에서는 브라우저 승인 금지 */
+   mode 'test' : 테스트 키로 진짜 결제창을 띄워요. 돈은 나가지 않아요.  'live' : 실제 결제.  'off' : 진짜 결제창을 쓰지 않아요.
+   승인은 언제나 서버(워커 POST /pay/confirm, ID 토큰 필요)가 하고, 결제 상태(paid)도 서버가 문서에 직접 써요.
+   시연 계정·시연 프렌드와의 수업은 예전 연습 결제창(돈 안 나감)을 써요.
+   간편결제 앱으로 넘어갔다가 이 주소로 돌아오기 때문에, 떠나기 전 화면 상태와 결제 대상(kind·refId)을 잠깐 저장해 둬요. */
+const PAYC=Object.assign({mode:'test',clientKey:''},window.BAEP_PAY||{});
+delete PAYC.testSecretKey;   /* 시크릿 키는 서버(워커)에만 있어요. 브라우저에서 승인하지 않아요 */
 const TP_KEY='baep3_paysnap';
-const tossOn=()=>PAYC.mode!=='off'&&MODE==='app'&&!KIOSK&&!!PAYC.clientKey;
-let TP=null;
+/* 진짜 결제창: 서버 로그인한 진짜 계정 + 워커 주소가 있을 때만. 시연 계정·둘러보기는 예전 연습 결제창 */
+const tossOn=()=>PAYC.mode!=='off'&&MODE==='app'&&!KIOSK&&!!PAYC.clientKey&&!!WORKER&&live();
+let TP=null,TP_LAST=null;
 const tpLoad=()=>window.TossPayments?Promise.resolve():new Promise((ok,no)=>{const s=document.createElement('script');s.src='https://js.tosspayments.com/v2/standard';s.onload=ok;s.onerror=()=>no(new Error('sdk'));document.head.appendChild(s)});
 const tpOrder=()=>'baep-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8);
+const tpRows=o=>o.rows||(o.kind==='lesson'?(()=>{const t=tutor(S.tid)||{name:''};return [['상품',`배프 1:1 수업 · ${DUR[S.dur].l}`],['프렌드 · 일시',`${t.name} · ${when(S.day,S.slot)}`]]})():[]);
 function tpDraw(){let el=document.querySelector('.pyw.tp');if(!TP){if(el)el.remove();return}
  if(TP.note){if(el)el.remove();el=document.createElement('div');el.className='pyw tp';el.setAttribute('role','dialog');phone().appendChild(el);el.innerHTML=`<div class="ck-s">${TP.note}</div>`;return}
- if(!el){el=document.createElement('div');el.className='pyw tp';el.setAttribute('role','dialog');el.setAttribute('aria-label','결제');phone().appendChild(el);const t=tutor(S.tid);
+ if(!el){el=document.createElement('div');el.className='pyw tp';el.setAttribute('role','dialog');el.setAttribute('aria-label','결제');phone().appendChild(el);
   el.innerHTML=`<div class="ck-s tp-s"><div class="ck-h"><b>결제하기</b><button class="ck-x" data-a="tp-close" aria-label="닫기">${I('x')}</button></div>
-  <div><div class="small muted">${TP.who==='child'?esc(S.sr.name)+' 님 수업료':'결제할 금액'}</div><div class="ck-amt">${won(amt())}</div></div>
-  <div class="ck-row"><span>상품</span><b>배프 1:1 수업 · ${DUR[S.dur].l}</b></div><div class="ck-row"><span>프렌드 · 일시</span><b>${t.name} · ${when(S.day,S.slot)}</b></div>
+  <div><div class="small muted">${TP.who==='child'?esc(S.sr.name)+' 님 '+(TP.kind==='outing'?'나들이 참가비':'수업료'):'결제할 금액'}</div><div class="ck-amt">${won(TP.amount)}</div></div>
+  ${tpRows(TP).map(([k,v])=>`<div class="ck-row"><span>${k}</span><b>${v}</b></div>`).join('')}
   ${PAYC.mode==='test'?`<div class="tp-test">테스트 결제예요 · 결제창은 진짜지만 돈은 나가지 않아요</div>`:''}
   <div id="tp-methods"></div><div id="tp-agree"></div><p class="ck-note tp-msg" aria-live="polite"></p>
-  <button class="btn y" data-a="tp-go" disabled>${won(amt())} 결제하기</button>
-  <button class="link" data-a="tp-practice" style="align-self:center">연습 결제창으로 할게요</button></div>`}
+  <button class="btn y" data-a="tp-go" disabled>${won(TP.amount)} 결제하기</button></div>`}
  const m=el.querySelector('.tp-msg'),g=el.querySelector('[data-a="tp-go"]');if(m)m.textContent=TP.err||(!TP.ready?'결제창을 불러오고 있어요…':TP.busy?'결제 화면으로 넘어가고 있어요…':'');if(g)g.disabled=!TP.ready||!!TP.busy}
-const tpNote=(kind,title,body,btns)=>{TP={note:`<div class="ck-mid">${kind==='spin'?'<div class="ck-spin"></div>':kind==='ok'?`<div class="okmark">${I('check')}</div>`:'<div class="ck-bad">!</div>'}<b style="font-size:1.15em">${title}</b><p class="small muted" style="margin:0">${body}</p></div>${(btns||[]).map(([l,a,v,c])=>`<button class="btn ${c||'ghost'}" data-a="${a}"${v?` data-v="${v}"`:''}>${l}</button>`).join('')}`};tpDraw()};
-async function tossOpen(who){TP={who,ready:false};tpDraw();
+const tpNote=(kind,title,body,btns)=>{TP={note:`<div class="ck-mid">${kind==='spin'?'<div class="ck-spin"></div>':kind==='ok'?`<div class="okmark">${I('check')}</div>`:'<div class="ck-bad">!</div>'}<b style="font-size:1.15em">${title}</b><p class="small muted" style="margin:0">${body}</p></div>${(btns||[]).map(([l,a,v,c])=>`<button class="btn ${c||'ghost'}" data-a="${a}"${v?` data-v="${v}"`:''}>${l}</button>`).join('')}`,screen:S.screen};tpDraw()};
+/* 결제 열기 — 1:1 수업·나들이가 같이 써요. amount 는 요청 문서(수업) 또는 나들이 신청서의 금액이에요 (서버가 다시 확인해요) */
+window.BAEP_TOSS_PAY=function(o){o=o||{};const amount=Math.round(+o.amount||0);
+ if(!(amount>0)||!o.kind||!o.refId){toast('결제 정보를 다시 확인해 주세요');return false}
+ if(!live()){toast('로그인한 뒤 결제할 수 있어요');return false}
+ if(!tossOn()){toast('지금은 결제를 준비 중이에요. 잠시 후 다시 해 주세요',3200);return false}
+ tossOpen({amount,orderName:String(o.orderName||'배프 결제').slice(0,90),kind:o.kind==='outing'?'outing':'lesson',refId:String(o.refId),who:o.who==='child'?'child':'self',rows:o.rows||null});return true};
+async function tossOpen(o){TP_LAST=o;TP=Object.assign({},o,{ready:false,screen:S.screen});tpDraw();
  try{await tpLoad();if(!TP)return;const tp=TossPayments(PAYC.clientKey);
   /* 비회원 결제. 카드 저장 같은 회원 결제를 쓰려면 계정마다 바뀌지 않는 고유값(추측 불가)을 넣어요 */
   const w=tp.widgets({customerKey:TossPayments.ANONYMOUS});
-  await w.setAmount({currency:'KRW',value:amt()});
+  await w.setAmount({currency:'KRW',value:TP.amount});
   await Promise.all([w.renderPaymentMethods({selector:'#tp-methods',variantKey:'DEFAULT'}),w.renderAgreement({selector:'#tp-agree',variantKey:'AGREEMENT'})]);
   if(!TP)return;TP.w=w;TP.ready=true}
- catch(e){console.warn('toss',e);if(!TP)return;TP.err='결제창을 불러오지 못했어요. 인터넷 연결을 확인하거나, 연습 결제창으로 해 주세요.'}
+ catch(e){console.warn('toss',e);if(!TP)return;TP.err='결제창을 불러오지 못했어요. 인터넷 연결을 확인하고 다시 해 주세요.'}
  tpDraw()}
 A['tp-close']=()=>{TP=null;tpDraw()};
-A['tp-practice']=()=>{const who=TP&&TP.who;TP=null;tpDraw();CK={step:'review',card:0,agree:false,pin:'',child:who==='child'};drawCk()};
-A['tp-retry']=v=>{TP=null;tpDraw();tossOpen(v==='child'?'child':'self')};
-A['tp-go']=async()=>{if(!TP||!TP.w||TP.busy)return;TP.busy=true;TP.err='';tpDraw();const t=tutor(S.tid);const orderId=tpOrder();
- const order={orderId,amount:amt(),who:TP.who,at:Date.now()};
- try{localStorage.setItem(TP_KEY,JSON.stringify({order,S}))}catch(e){}
+A['tp-retry']=()=>{TP=null;tpDraw();if(TP_LAST)tossOpen(TP_LAST)};
+/* 결제 앱으로 넘어갔다 돌아오기 때문에, 떠나기 전 화면 상태를 잠깐 저장해 둬요 (비밀번호 칸은 빼고) */
+const snapS=()=>{const c=JSON.parse(JSON.stringify(S));if(c.sr){delete c.sr.pw;delete c.sr.pw2}if(c.tu){delete c.tu.pw;delete c.tu.pw2;if(c.tu.photo)c.tu.photo='sample'}delete c.login;delete c.adl;return c};
+A['tp-go']=async()=>{if(!TP||!TP.w||TP.busy)return;TP.busy=true;TP.err='';tpDraw();const orderId=tpOrder();
+ const order={orderId,amount:TP.amount,who:TP.who,kind:TP.kind,refId:TP.refId,orderName:TP.orderName,rows:TP.rows,screen:TP.screen,at:Date.now()};
+ try{localStorage.setItem(TP_KEY,JSON.stringify({order,acct:S.me,S:snapS()}))}catch(e){}
  const back=location.origin+location.pathname;
- try{await TP.w.requestPayment({orderId,orderName:`배프 1:1 수업 · ${t.name} 프렌드 (${DUR[S.dur].l})`,successUrl:back+'?toss=ok',failUrl:back+'?toss=fail',customerName:S.sr.name||'배움님'})}
+ try{await TP.w.requestPayment({orderId,orderName:TP.orderName,successUrl:back+'?toss=ok',failUrl:back+'?toss=fail',customerName:S.sr.name||'배움님'})}
  catch(e){console.warn('toss req',e);if(TP){TP.busy=false;TP.err=e&&/CANCEL/.test(e.code||'')?'':((e&&e.message)||'결제를 시작하지 못했어요');tpDraw()}}};
-const _ckPay=A.pay;A.pay=()=>{if(tossOn()){tossOpen('self');return}_ckPay()};
-const _cPayNow=A['c-paynow'];A['c-paynow']=()=>{const k=S.child.req;if(!k)return;if(tossOn()){Object.assign(S,{tid:k.tid,day:k.day,slot:k.slot,place:k.place,dur:k.dur});tossOpen('child');return}_cPayNow()};
-/* 승인: 승인 서버(confirmUrl)가 있으면 서버로, 테스트 모드면 테스트 키로 바로 */
-async function tpConfirm(b){
- if(PAYC.confirmUrl){const r=await fetch(PAYC.confirmUrl,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});const j=await r.json().catch(()=>({}));if(!r.ok)throw j;return j}
- if(PAYC.mode==='test'&&PAYC.testSecretKey){const r=await fetch('https://api.tosspayments.com/v1/payments/confirm',{method:'POST',headers:{Authorization:'Basic '+btoa(PAYC.testSecretKey+':'),'Content-Type':'application/json'},body:JSON.stringify(b)});const j=await r.json().catch(()=>({}));if(!r.ok)throw j;return j}
- throw {message:'결제 승인 서버가 아직 설정되지 않았어요. 운영자에게 알려주세요.'}}
+/* 1:1 수업 결제: 진짜 요청(Firestore)이면 진짜 결제창 → 서버 승인, 아니면(시연) 연습 결제창 */
+const remoteLesson=()=>!!(S.req&&S.req.remote&&S.req.rid);
+const lessonName=()=>{const t=tutor(S.tid)||{name:''};return `배프 1:1 수업 · ${t.name} 프렌드 (${DUR[S.dur].l})`};
+const _ckPay=A.pay;A.pay=()=>{if(remoteLesson()){window.BAEP_TOSS_PAY({amount:S.req.amount||DUR[S.dur].p,orderName:lessonName(),kind:'lesson',refId:S.req.rid,who:'self'});return}_ckPay()};
+const _cPayNow=A['c-paynow'];A['c-paynow']=()=>{const k=S.child.req;if(!k)return;if(remoteLesson()){Object.assign(S,{tid:k.tid,day:k.day,slot:k.slot,place:k.place,dur:k.dur});window.BAEP_TOSS_PAY({amount:S.req.amount||DUR[S.dur].p,orderName:lessonName(),kind:'lesson',refId:S.req.rid,who:'child'});return}_cPayNow()};
+/* 서버 승인 뒤: 결제 상태는 서버가 쓴 문서(paid:true)로만 확인해요 */
+window.BAEP_WAIT_PAID=(path,ms)=>new Promise(async res=>{const db=await myDB();if(!db){res(null);return}let un=null,fin=false;
+ const end=v=>{if(fin)return;fin=true;clearTimeout(t);try{un&&un()}catch(e){}res(v)};const t=setTimeout(()=>end(null),ms||20000);
+ try{un=db.doc(path).onSnapshot(sn=>{const d=sn.exists?sn.data():null;if(d&&d.paid===true)end(d)},()=>end(null))}catch(e){end(null)}});
 function tpDone(o,res){const prov=res.easyPay&&res.easyPay.provider;const how=prov||res.method||'결제';
- S.method=how;S.lastPay={orderId:res.orderId,paymentKey:res.paymentKey,amount:res.totalAmount,method:how,at:res.approvedAt,receipt:res.receipt&&res.receipt.url,test:PAYC.mode==='test'||!!res.mId&&/^tg/.test(res.mId),day:S.day};
+ S.method=how;S.lastPay={orderId:res.orderId||o.orderId,paymentKey:res.paymentKey,amount:res.totalAmount||o.amount,method:how,at:res.approvedAt,receipt:res.receipt&&res.receipt.url,test:PAYC.mode==='test'||!!res.mId&&/^tg/.test(res.mId),day:S.day};
  TP=null;tpDraw();
  if(o.who==='child'){S.payer='child';_pay();S.childPaid=true;S.childSent=false;S.child.req=null;S.child.paidKeys.push('b'+S.booking.day);pNoti('결제 완료','자녀분이 수업료 결제를 마쳤어요. 수업이 확정됐어요','card');S.child.back='done';S.hist=[];S.screen='c_paid';render();toast(how+'로 결제했어요')}
  else{S.payer='self';_pay()}
- const p=S.ad.pays[S.ad.pays.length-1];if(p&&p.me)Object.assign(p,{how,orderId:res.orderId,pk:res.paymentKey,receipt:S.lastPay.receipt,test:S.lastPay.test})}
-function tpReturn(){if(MODE!=='app')return;const q=new URLSearchParams(location.search);const st=q.get('toss');if(!st)return;
+ const p=S.ad.pays[S.ad.pays.length-1];if(p&&p.me)Object.assign(p,{how,orderId:S.lastPay.orderId,pk:res.paymentKey,receipt:S.lastPay.receipt,test:S.lastPay.test})}
+let LATE_REC=false;const LATE_MSG='결제는 됐는데 기록이 늦어지고 있어요. 잠시 후 확인해 주세요';
+const PAY_DONE={
+ lesson:async(o,res)=>{tpNote('spin','결제를 확인하고 있어요','화면을 닫지 말고 잠시만 기다려 주세요');PAYING_RID=o.refId;
+  const d=await window.BAEP_WAIT_PAID('baep_requests/'+o.refId,20000);PAYING_RID=null;
+  if(!d){tpNote('bad','결제 확인이 늦어지고 있어요',(LATE_REC?LATE_MSG+'. ':'결제는 승인됐어요. 잠시 뒤 홈에서 다시 확인해 주세요. ')+'계속 안 보이면 고객센터(1588-0000)로 알려 주세요.',[['닫기','tp-close']]);LATE_REC=false;if(S.req&&S.req.rid)watchReq();return}
+  if(!S.req||S.req.rid!==o.refId){TP=null;tpDraw();render();return}
+  tpDone(o,res)},
+ outing:async(o,res)=>{if(typeof window.BAEP_OUTING_PAID==='function')await window.BAEP_OUTING_PAID(o,res);else{TP=null;tpDraw();render()}}};
+window.BAEP_PAY_UI={note:(k,t,b,btns)=>tpNote(k,t,b,btns),close:()=>{TP=null;tpDraw()}};
+/* 결제를 기다리던 요청이 (다른 기기·나중에) 서버에서 결제 완료로 바뀌면 수업 확정으로 */
+onLessonPaid=d=>{if(!S.req||!S.req.remote||S.req.rid!==d.rid)return;S.payer=S.payer||'self';_pay();toast('결제가 확인됐어요. 수업이 확정됐어요',2600)};
+async function tpReturn(){if(MODE!=='app')return;const q=new URLSearchParams(location.search);const st=q.get('toss');if(!st)return;
  history.replaceState(null,'',location.pathname);
  let snap=null;try{snap=JSON.parse(localStorage.getItem(TP_KEY)||'null')}catch(e){}
  try{localStorage.removeItem(TP_KEY)}catch(e){}
- if(!snap||!snap.S||!snap.order||Date.now()-snap.order.at>36e5){render();toast('결제 정보를 찾지 못했어요. 처음부터 다시 해 주세요');return}
- Object.keys(snap.S).forEach(k=>{S[k]=snap.S[k]});const o=snap.order;S.screen=o.who==='child'?'c_pay':'pay';S.hist=S.hist||[];render();
- if(S.me&&S.req&&S.req.rid){try{watchReq()}catch(e){}}
+ if(!snap||!snap.S||!snap.order||Date.now()-snap.order.at>36e5){render();toast('결제 정보를 찾지 못했어요. 처음부터 다시 해 주세요',3200);return}
+ /* 신원은 서버 로그인으로만: 결제하던 계정과 지금 로그인한 계정이 같아야 해요 */
+ if(!SES.acct||snap.acct!==SES.acct){render();toast('로그인이 끝나서 결제를 이어갈 수 없어요. 다시 로그인한 뒤 확인해 주세요',4200);return}
+ Object.keys(snap.S).forEach(k=>{if(k!=='me')S[k]=snap.S[k]});S.me=SES.acct;const o=snap.order;TP_LAST=o;S.screen=o.screen||(o.who==='child'?'c_pay':'pay');S.hist=S.hist||[];render();
+ if(S.req&&S.req.rid&&o.kind!=='lesson'){try{watchReq()}catch(e){}}
  if(st==='fail'){const code=q.get('code')||'';if(/CANCEL/.test(code)){toast('결제를 취소했어요');return}
-  tpNote('bad','결제가 안 됐어요',esc(q.get('message')||'다시 시도해 주세요')+'<br>돈은 나가지 않았어요.',[['다시 결제하기','tp-retry',o.who,'y'],['닫기','tp-close']]);return}
+  tpNote('bad','결제가 안 됐어요',esc(q.get('message')||'다시 시도해 주세요')+'<br>돈은 나가지 않았어요.',[['다시 결제하기','tp-retry','','y'],['닫기','tp-close']]);return}
  const b={paymentKey:q.get('paymentKey'),orderId:q.get('orderId'),amount:Number(q.get('amount'))};
- if(b.orderId!==o.orderId||b.amount!==o.amount){tpNote('bad','결제를 멈췄어요','주문 정보가 맞지 않아요. 돈은 나가지 않았어요.',[['다시 결제하기','tp-retry',o.who,'y'],['닫기','tp-close']]);return}
- tpNote('spin','결제를 확인하고 있어요','화면을 닫지 말고 잠시만 기다려 주세요');
- tpConfirm(b).then(res=>tpDone(o,res)).catch(e=>{console.warn('confirm',e);tpNote('bad','결제가 안 됐어요',esc((e&&e.message)||'승인 중 문제가 생겼어요')+'<br>승인되지 않아 돈은 나가지 않았어요. 혹시 빠져나갔다면 운영자에게 알려주세요.',[['다시 결제하기','tp-retry',o.who,'y'],['닫기','tp-close']])})}
-/* 실제 결제창을 쓰면 결제 수단은 결제창 안에서 골라요 */
+ if(!b.paymentKey||b.orderId!==o.orderId||b.amount!==o.amount){tpNote('bad','결제를 멈췄어요','주문 정보가 맞지 않아요. 돈은 나가지 않았어요.',[['다시 결제하기','tp-retry','','y'],['닫기','tp-close']]);return}
+ tpNote('spin','결제를 확인하고 있어요','화면을 닫지 말고 잠시만 기다려 주세요');if(o.kind==='lesson')PAYING_RID=o.refId;
+ let r=await api('/pay/confirm',{...b,kind:o.kind,refId:o.refId},{bearer:true});
+ if(!r.ok&&r.code==='ALREADY_PAID')r=Object.assign({},r,{ok:true,already:true,orderId:r.orderId||o.orderId});   /* 이미 결제됨 = 성공으로 봐요 */
+ if(r.ok&&r.recorded===false)LATE_REC=true;
+ if(!r.ok){PAYING_RID=null;console.warn('confirm',r);tpNote('bad','결제가 안 됐어요',esc(errMsg(r))+'<br>승인되지 않아 돈은 나가지 않았어요. 혹시 빠져나갔다면 고객센터(1588-0000)로 알려 주세요.',[['다시 결제하기','tp-retry','','y'],['닫기','tp-close']]);return}
+ await (PAY_DONE[o.kind]||PAY_DONE.lesson)(o,r)}
+/* 진짜 결제창을 쓰면 결제 수단은 결제창 안에서 골라요 */
 const TP_INFO=`<div class="sec">결제 방법</div><div class="card tp-info"><span>${I('card')}</span><span><b>다음 화면에서 골라요</b><small class="muted">카카오페이 · 토스페이 · 네이버페이 · 페이코 · 카드 · 계좌이체</small></span></div>`;
-const _scPayT=SC.pay;SC.pay=()=>{const h=_scPayT();return tossOn()?h.replace(/<div class="sec">결제 방법<\/div>[\s\S]*?(?=\n <\/main>)/,TP_INFO):h};
-const _scCPay=SC.c_pay;SC.c_pay=()=>{const h=_scCPay();return tossOn()?h.replace(/<div class="sec">결제 방법<\/div>[\s\S]*?(?=\n <button class="link" data-a="c-skip")/,TP_INFO):h};
+const _scPayT=SC.pay;SC.pay=()=>{const h=_scPayT();return remoteLesson()&&tossOn()?h.replace(/<div class="sec">결제 방법<\/div>[\s\S]*?(?=\n <\/main>)/,TP_INFO):h};
+const _scCPay=SC.c_pay;SC.c_pay=()=>{const h=_scCPay();return remoteLesson()&&tossOn()?h.replace(/<div class="sec">결제 방법<\/div>[\s\S]*?(?=\n <button class="link" data-a="c-skip")/,TP_INFO):h};
 /* 결제 완료 화면에 결제 수단·주문번호·영수증 */
 const tpCard=()=>{const p=S.lastPay;if(!p||!S.booking||p.day!==S.booking.day)return '';return `<div class="card tp-rc"><div><b>${esc(p.method)}</b>로 결제 · ${won(p.amount)}${p.test?' <span class="tp-tag">테스트</span>':''}</div><small class="muted">주문번호 ${esc(p.orderId)}</small>${p.receipt?`<a class="link" href="${esc(p.receipt)}" target="_blank" rel="noopener">영수증 보기 ↗</a>`:''}</div>`};
 const _scDone=SC.done;SC.done=()=>{const h=_scDone();const c=tpCard();const at='<div class="card" style="display:flex;flex-direction:column;gap:.7em">';return c&&h.includes(at)?h.replace(at,c+at):h};
@@ -2588,7 +2827,7 @@ const _render=render;
 render=function(){_render();
  if(S.screen==='splash'){const f=document.querySelector('.spl iframe');if(f&&!f.srcdoc)f.srcdoc=SPLASH3D}
  if(!['pay','c_pay'].includes(S.screen)&&CK){CK=null;drawCk()}
- if(!['pay','c_pay'].includes(S.screen)&&TP){TP=null;tpDraw()}
+ if(TP&&TP.screen&&S.screen!==TP.screen){TP=null;tpDraw()}
  if(S.screen!=='practice'&&document.querySelector('.pxo')&&!['practice','home'].includes(S.screen))document.querySelector('.pxo').remove();
  if(CO&&CO.screen!==S.screen){document.querySelector('.co')?.remove();if(CO.ready)seen(CO.key);CO=null}
  else if(CO&&CO.ready)CO.show();
@@ -2596,7 +2835,17 @@ render=function(){_render();
 
 /* 시작 화면 */
 if(MODE==='app'&&KIOSK){S.screen='join';A.demo();S.sr.topics=['kiosk'];S.screen='practice';render();setTimeout(()=>A.cwprac('m'),400)}
-else if(MODE==='app'){if(Q.has('new')){try{Object.keys(localStorage).filter(k=>k.startsWith('baep3_')).forEach(k=>localStorage.removeItem(k))}catch(e){}history.replaceState(null,'',location.pathname);SEEN={}}if(S.screen==='join')S.screen='splash';render();tpReturn()}
+else if(MODE==='app'){
+ /* 안드로이드 앱 안에서는 운영자 화면을 열지 않아요 */
+ if(APP_Q.get('app')==='admin'&&IN_ANDROID){history.replaceState(null,'',location.pathname);setTimeout(()=>toast('운영자 화면은 앱에서 열 수 없어요',3200),300)}
+ if(ADMIN_APP){document.title='배프 운영자';document.documentElement.classList.add('baep-admin')}
+ /* ?new=1 : 시연을 처음부터 (이 폰의 시연 기록 지우기) — 'demo' 모드에서만 */
+ if(Q.has('new')&&DEMO_MODE&&!ADMIN_APP){try{Object.keys(localStorage).filter(k=>k.startsWith('baep3_')).forEach(k=>localStorage.removeItem(k))}catch(e){}history.replaceState(null,'',location.pathname);SEEN={}}
+ if(S.screen==='join')S.screen='splash';render();
+ /* 새로고침: 남아 있는 서버 로그인으로 다시 들어가요. 간편로그인에서 막 돌아온 경우는 feat-auth.js 가 처리해요 */
+ const hasAuth=!ADMIN_APP&&/[#&]baep_auth(_error)?=/.test(location.hash);
+ window.BAEP_BOOT=hasAuth?Promise.resolve(false):restoreSession().catch(e=>{console.warn('[배프] 로그인 복원',e);return false});
+ if(Q.has('toss'))window.BAEP_BOOT.then(()=>tpReturn()).catch(e=>console.warn('[배프] 결제 돌아오기',e))}
 })();
 
 /* ===== 한 화면 보기(?s=) 상태 만들기 + 전체 화면 보기 보드 ===== */

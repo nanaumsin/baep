@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>배프 운영자</title>
+<script src="app-config.js"></script>
+<script>
+/* 배프 운영자 화면 — 같은 앱 코드(index.html)를 운영자 모드(?app=admin)로 열어요.
+   안드로이드 앱에는 이 파일이 들어가지 않아요(app/build.gradle ignoreAssetsPattern).
+   진짜 보호는 서버 규칙이에요: 운영자 권한(role 'admin')이 없으면 화면을 열어도 데이터가 안 읽혀요. */
+(function(){
+  var q = new URLSearchParams(location.search);
+  q.set('app', 'admin');
+  location.replace('index.html?' + q.toString() + location.hash);
+})();
+</script>
+</head>
+<body>
+<noscript>배프 운영자 화면은 자바스크립트가 필요해요. <a href="index.html?app=admin">운영자 화면 열기</a></noscript>
+</body>
+</html>

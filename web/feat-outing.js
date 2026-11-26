@@ -9,6 +9,14 @@
    운영자:  왼쪽 메뉴 "나들이 팀 배정" → 신청자 · [AI 자동 배정] → 팀 옮기기 → [확정하고 문자 보내기]
    프렌드:  홈에 "나들이 배정" 카드
    나들이를 결제해도 '혼자 연습'이 열려요 (S.paid = 1:1 수업 결제 또는 나들이 결제).
+
+   저장소 (docs/ARCH-v2.md)
+     진짜 계정(서버 로그인) → Firestore
+       신청   baep_outing_apps/{oid}_{acct} = {oid, acct, name, dong, levels, score, companions:[{name,rel,phone}], status:'applied', createdAt, amount}
+              결제는 BAEP_TOSS_PAY(kind 'outing', refId = 신청 문서 id) → 서버가 paid 를 써요. 앱은 paid·team·status 를 바꾸지 않아요
+       팀     baep_outing_teams/{oid}_{teamNo} (운영자만 씀) · 확정 문자 기록 baep_sms (운영자만)
+       남은 자리  baep_outings/{oid}.applied (운영자 화면이 써요 · 누구나 읽음)
+     시연 계정·둘러보기 → 이 폰 localStorage(baep3_outing) — 예전과 같아요
    한 화면 보기: index.html?s=join&o=o_list (권장 · 콘솔 오류 없음) 또는 ?s=o_list — o_detail · o_rec · o_apply · o_comp · o_pay · o_paysheet · o_done · o_mine · o_mine_team · o_sms · home_outing · ad_outing · ad_outing_ai · thome_outing */
 (function(){
 'use strict';
@@ -85,11 +93,16 @@ const scoreOf=lv=>SKILLS.reduce((s,[k])=>s+(LV[lv[k]]?LV[lv[k]][1]:0),0);
 const mkApp=([oid,id,name,age,dong,lv,comp,payer])=>({id,oid,acct:id,name,age,dong,ph:'010-****-'+String(1000+(+id.slice(1))*733%9000),lv,score:scoreOf(lv),comp,payer,method:'카카오페이',
  amt:PRICE*(comp&&CFG.COMPANION_PAYS?2:1),paidAt:md(TODAYN-((id.charCodeAt(1)*7)%6)-1),st:'assign',notis:[]});
 const seed=()=>({v:1,apps:SEED.map(mkApp),ev:Object.fromEntries(OUTINGS.map(o=>[o.id,{st:'none',teams:[],fnoti:{}}]))});
-let OUT=null;
-try{const j=lsGet();if(j){const o=JSON.parse(j);if(o&&o.v===1&&Array.isArray(o.apps))OUT=o}}catch(e){}
-if(!OUT)OUT=seed();
-OUTINGS.forEach(o=>{if(!OUT.ev[o.id])OUT.ev[o.id]={st:'none',teams:[],fnoti:{}}});
-const save=()=>{lsSet(JSON.stringify(OUT));const a=myApp();S.outing=a?JSON.parse(JSON.stringify(a)):null};
+let LOCAL=null;
+try{const j=lsGet();if(j){const o=JSON.parse(j);if(o&&o.v===1&&Array.isArray(o.apps))LOCAL=o}}catch(e){}
+if(!LOCAL)LOCAL=seed();
+OUTINGS.forEach(o=>{if(!LOCAL.ev[o.id])LOCAL.ev[o.id]={st:'none',teams:[],fnoti:{}}});
+/* 진짜 계정일 때 Firestore 에서 읽어 온 것 (같은 모양으로 바꿔 둬요) */
+const emptyRemote=()=>({v:1,remote:true,apps:[],ev:Object.fromEntries(OUTINGS.map(o=>[o.id,{st:'none',teams:[],fnoti:{}}])),teamIds:{},counts:{},at:0,who:null});
+let REMOTE=emptyRemote();
+let OUT=LOCAL;
+const pickStore=()=>{const r=typeof live==='function'&&live();if(r&&REMOTE.who!==S.me){REMOTE=emptyRemote();REMOTE.who=S.me}OUT=r?REMOTE:LOCAL;return OUT};
+const save=()=>{if(OUT!==LOCAL){S.outing=null;return}lsSet(JSON.stringify(LOCAL));const a=myApp();S.outing=a?JSON.parse(JSON.stringify(a)):null};
 if(typeof KEEP!=='undefined'&&KEEP.mentee&&!KEEP.mentee.includes('outing'))KEEP.mentee.push('outing');
 
 const OB=id=>OUTINGS.find(o=>o.id===id)||OUTINGS[0];
@@ -97,24 +110,124 @@ const EV=id=>OUT.ev[id]||(OUT.ev[id]={st:'none',teams:[],fnoti:{}});
 const O=()=>S.o||(S.o={cur:'o1',sheet:null,f:null,ck:null,prep:null,adEv:'o1'});
 /* 지금 로그인한 배움님 (시연 계정 baeum·baeum01·로그인 없이 둘러보기는 모두 'baeum') */
 const meKey=()=>{const id=S.me;if(!id||id==='baeum01'||id==='baeum')return 'baeum';const a=typeof ACCOUNTS!=='undefined'&&ACCOUNTS[id];return a&&a.role==='mentor'?null:id};
-const myApp=()=>{const k=meKey();return k?OUT.apps.find(a=>a.acct===k&&a.st!=='cancel')||null:null};
-const appsOf=oid=>OUT.apps.filter(a=>a.oid===oid&&a.st!=='cancel');
+const myApp=()=>{const k=meKey();return k?OUT.apps.find(a=>a.acct===k&&a.st!=='cancel'&&!a.ghost)||null:null};
+/* 결제를 마친 신청만 팀 배정에 들어가요 (진짜 신청은 서버가 쓴 paid 로 판단) */
+const appsOf=oid=>OUT.apps.filter(a=>a.oid===oid&&a.st!=='cancel'&&!(a.remote&&!a.paid&&!a.ghost));
+const unpaidOf=oid=>OUT.apps.filter(a=>a.oid===oid&&a.remote&&!a.paid&&!a.ghost&&a.st!=='cancel');
 /* 사람 단위 목록: 신청자 + 동반자(같은 동네·같은 수준으로 봐요) */
 const persons=oid=>{const L=[];appsOf(oid).forEach(a=>{L.push({pid:a.id,a,name:a.name,age:a.age,score:a.score,dong:a.dong,comp:false});
  if(a.comp)L.push({pid:a.id+'c',a,name:a.comp.name,age:a.comp.age||'',score:a.score,dong:a.dong,comp:true,rel:a.comp.rel})});return L};
 const pById=(oid,pid)=>persons(oid).find(p=>p.pid===pid);
 const cap=o=>o.teams*CFG.MAX_PER_TEAM;
-const left=o=>Math.max(0,cap(o)-persons(o.id).length);
+const left=o=>Math.max(0,cap(o)-(OUT.remote&&SES.role!=='admin'?Math.max(OUT.counts[o.id]||0,persons(o.id).length):persons(o.id).length));
 const fname=n=>String(n||'').length>=3?String(n).slice(1):String(n||'');
 const lvName=s=>s>=5?'익숙해요':s>=2?'조금 도움':'처음이에요';
 const lvCls=s=>s>=5?'hi':s>=2?'mid':'lo';
 const hasLesson=()=>(S.history&&S.history.length>0)||!!S.booking;
-const outPaid=()=>!!myApp();
+const outPaid=()=>{const a=myApp();return !!a&&(!a.remote||a.paid)};
 
 /* 연습 잠금 조건 넓히기: S.paid = 1:1 수업 결제(원래 값) 또는 나들이 결제 */
 function hookPaid(){const d=Object.getOwnPropertyDescriptor(S,'paid');if(d&&d.get)return;const v=d?!!d.value:false;
  Object.defineProperty(S,'_paid',{value:v,writable:true,configurable:true,enumerable:false});
  Object.defineProperty(S,'paid',{configurable:true,enumerable:true,get(){return !!this._paid||outPaid()},set(x){this._paid=!!x}})}
+
+/* =====================================================================
+   1-2. Firestore (진짜 계정) — 읽어 와서 위와 같은 모양(OUT.apps · OUT.ev)으로 바꿔요
+   ===================================================================== */
+const docId=(oid,acct)=>oid+'_'+acct;
+const LVOK=v=>LV[v]?v:'new';
+const normLv=l=>{l=l||{};return {kiosk:LVOK(l.kiosk),taxi:LVOK(l.taxi),kakao:LVOK(l.kakao)}};
+const tsMd=t=>{try{const ms=t&&t.toDate?t.toDate().getTime():t&&t.seconds?t.seconds*1000:typeof t==='string'?Date.parse(t):+t;if(!ms)return '';const d=new Date(ms);return `${d.getMonth()+1}월 ${d.getDate()}일`}catch(e){return ''}};
+/* 알림을 이미 보여 줬는지 (이 폰 · 계정별) */
+const SEEN_K=()=>'baep3_oseen_'+(S.me||'');
+const seenGet=()=>{try{return JSON.parse(localStorage.getItem(SEEN_K())||'{}')||{}}catch(e){return {}}};
+const seenSet=(k,v)=>{const m=seenGet();m[k]=v||1;try{localStorage.setItem(SEEN_K(),JSON.stringify(m))}catch(e){}};
+function fromDoc(id,d){d=safeDeep(d||{});const lv=normLv(d.levels);const c=(Array.isArray(d.companions)?d.companions:[])[0];const sn=seenGet();
+ const a={id,oid:OB(d.oid).id,acct:d.acct,name:d.name||d.acct,age:'',dong:d.dong||'영통동',ph:'',lv,score:Number.isFinite(+d.score)?+d.score:scoreOf(lv),
+  comp:c?{name:c.name||'',age:'',rel:c.rel||'동반',ph:c.phone||''}:null,payer:'본인',method:'',amt:+d.amount||PRICE*(1+(Array.isArray(d.companions)?d.companions.length:0)),paid:d.paid===true,paidAt:tsMd(d.paidAt)||tsMd(d.createdAt),
+  st:d.status==='confirmed'?'team':'assign',status:d.status||'applied',team:d.team||null,notis:[],me:d.acct===S.me,remote:true,known:null,notified:d.status==='confirmed'};
+ if(a.st==='team'){const o=OB(a.oid);const k='conf_'+id;a.notis=[{id:k,t:'나들이 팀이 정해졌어요',b:`${mdw(o.date)} ${o.start} ${o.place} · 팀이 정해졌어요. 택시비·음료비는 각자 내요`,shown:!!sn[k],read:sn[k]===2}]}
+ return a}
+/* 프렌드 카드: 팀 문서에 있는 프렌드가 이 폰 목록에 없으면 이름만 있는 카드를 만들어요 (목록에는 안 보여요) */
+const ensureTutor=(acct,name)=>{const id='acc-'+acct;if(acct===S.me&&tutor('me'))return 'me';if(!tutor(id))TUTORS.push({id,acct,name:name||'프렌드',school:'',major:'',age:'',gender:'',lat:37.256,lon:127.0665,rad:3,rating:5,reviews:0,price:20000,color:'#CDEBDD',approved:false,stub:true,intro:'',topics:[],tags:[],wd:[],slots:[],full:{},revs:[]});return id};
+function teamFrom(id,t){t=safeDeep(t||{});const oid=OB(t.oid).id;
+ const members=(t.members||[]).map(m=>docId(oid,m.acct)+(m.companion?'c':''));
+ const friends=(t.friends||[]).map(f=>({tid:ensureTutor(f.acct,f.name),pids:(f.helps||[]).map(String)}));
+ return {id,no:+t.teamNo||0,name:(+t.teamNo||1)+'팀',members,friends,confirmed:!!t.confirmed,raw:t}}
+/* 다른 팀원은 팀 문서의 이름·수준만으로 보여 줘요 (그분들 신청서는 읽지 않아요) */
+function ghosts(teams){const L=[];teams.forEach(tm=>{const by={};(tm.raw.members||[]).forEach(m=>{(by[m.acct]=by[m.acct]||[]).push(m)});
+ Object.entries(by).forEach(([acct,ms])=>{const main=ms.find(m=>!m.companion)||ms[0];const cp=ms.find(m=>m.companion);const lv=normLv(main.levels);
+  L.push({id:docId(OB(tm.raw.oid).id,acct),oid:OB(tm.raw.oid).id,acct,name:main.name||'',age:'',dong:main.dong||'',ph:'',lv,score:scoreOf(lv),comp:cp?{name:cp.name||'',rel:cp.rel||'동반'}:null,payer:'',amt:0,paid:true,st:tm.confirmed?'team':'assign',notis:[],ghost:true,remote:true})})});return L}
+function applyRemote(apps,teamDocs){const R=REMOTE;const teams=teamDocs.map(([id,t])=>teamFrom(id,t)).sort((a,b)=>a.no-b.no);
+ const g=ghosts(teams).filter(x=>!apps.some(a=>a.id===x.id));R.apps=apps.concat(g);
+ OUTINGS.forEach(o=>{const old=R.ev[o.id]||{};const ts=teams.filter(t=>OB(t.raw.oid).id===o.id);
+  R.ev[o.id]={st:ts.length?(ts.every(t=>t.confirmed)?'confirmed':'ai'):'none',teams:ts,fnoti:old.fnoti||{},at:old.at};R.teamIds[o.id]=ts.map(t=>t.id)});
+ R.at=Date.now()}
+let _rBusy=null;
+/* role 에 맞게 다시 읽기 (배움님: 내 신청·내 팀 / 프렌드: 내가 맡은 팀 / 운영자: 고른 나들이 전체) */
+async function rLoad(force){pickStore();if(!OUT.remote)return false;if(!force&&Date.now()-REMOTE.at<15000)return false;if(_rBusy)return _rBusy;
+ _rBusy=(async()=>{const db=await myDB();if(!db)return false;const me=S.me;
+  try{
+   const cq=await Promise.all(OUTINGS.map(o=>db.doc('baep_outings/'+o.id).get().catch(()=>null)));cq.forEach((sn,i)=>{if(sn&&sn.exists)REMOTE.counts[OUTINGS[i].id]=+((sn.data()||{}).applied)||0});
+   if(SES.role==='admin'){const oid=O().adEv||'o1';
+    const q=await db.collection('baep_outing_apps').where('oid','==',oid).get();const apps=q.docs.map(d=>fromDoc(d.id,d.data()));
+    /* 문자·나이는 계정 문서에서 (운영자만 읽을 수 있어요) */
+    await Promise.all(apps.map(async a=>{try{const sn=await db.doc('baep_accounts/'+a.acct).get();const sr=sn.exists?safeDeep((sn.data()||{}).sr||{}):{};a.ph=sr.phone||'';a.age=sr.age||'';a.payer=sr.byChild?'자녀':'본인'}catch(e){}}));
+    const tq=await db.collection('baep_outing_teams').where('oid','==',oid).get();
+    const keep=REMOTE.apps.filter(a=>a.oid!==oid&&!a.ghost);applyRemote(keep.concat(apps),tq.docs.map(d=>[d.id,d.data()]))}
+   else if(SES.role==='mentor'){const tq=await db.collection('baep_outing_teams').where('friendAccts','array-contains',me).get();applyRemote([],tq.docs.map(d=>[d.id,d.data()]))}
+   else{const q=await db.collection('baep_outing_apps').where('acct','==',me).get();const apps=q.docs.map(d=>fromDoc(d.id,d.data()));let teams=[];
+    if(apps.some(a=>a.team||a.status!=='applied')){const tq=await db.collection('baep_outing_teams').where('memberAccts','array-contains',me).get();teams=tq.docs.map(d=>[d.id,d.data()])}
+    applyRemote(apps,teams)}
+   return true}
+  catch(e){console.warn('[feat-outing] 나들이 정보를 못 읽었어요',e);return false}})();
+ const r=await _rBusy;_rBusy=null;if(r&&S.me===REMOTE.who&&/^o_|^home$|^thome$|^admin$|^practice$|^mine$/.test(S.screen))render();return r}
+/* 신청서 만들기/고치기 → 결제. 금액(amount)·status·team·paid 는 서버·운영자만 써요.
+   결제 금액 = 1인 참가비 × (1 + 동반자 수) — 서버가 신청서의 동반자 수로 다시 계산해서 확인해요 */
+async function rApply(f){const db=await myDB();if(!db)return null;const o=OB(f.oid);const id=docId(o.id,S.me);
+ const companions=f.comp?[{name:f.cname,rel:f.crel,phone:f.cph}]:[];const amount=PRICE*(1+companions.length);
+ const own={oid:o.id,acct:S.me,name:String(S.sr.name||'').slice(0,100),dong:S.sr.dong||((S.sr.area||'').match(/\S+동/)||['영통동'])[0],levels:Object.assign({},f.lv),score:scoreOf(f.lv),companions};
+ const ex=REMOTE.apps.find(a=>a.id===id&&!a.ghost);
+ try{if(ex&&ex.paid)return {id,amount,paid:true};
+  if(ex)await db.doc('baep_outing_apps/'+id).update(own);
+  else await db.doc('baep_outing_apps/'+id).set(Object.assign({},own,{createdAt:Date.now()}));
+  return {id,amount}}
+ catch(e){console.warn('[feat-outing] 신청 저장 실패',e);return null}}
+const payOuting=(id,amount,o,n)=>window.BAEP_TOSS_PAY({amount,orderName:`배프 나들이 · ${o.short} (${n}명)`,kind:'outing',refId:id,
+ rows:[['나들이',`${o.short} · ${mdw(o.date)} ${o.start}`],['인원',`${n}명`],['따로 내는 돈','택시비·음료비·식사비 (각자)']]});
+/* 결제 승인 뒤 (index.html 이 /pay/confirm 을 부른 다음 여기로): 서버가 신청서에 paid 를 쓰면 신청 완료 */
+window.BAEP_OUTING_PAID=async o=>{const ui=window.BAEP_PAY_UI;if(ui)ui.note('spin','결제를 확인하고 있어요','화면을 닫지 말고 잠시만 기다려 주세요');
+ const d=await window.BAEP_WAIT_PAID('baep_outing_apps/'+o.refId,20000);await rLoad(true);if(ui)ui.close();
+ if(!d){toast('결제는 승인됐어요. 확인이 늦어지고 있어요. 잠시 뒤 다시 확인해 주세요',4200);S.hist=['home'];S.screen='o_mine';render();return}
+ const a=myApp();const ob=OB((a&&a.oid)||O().cur);O().ck=null;O().f=null;S.hist=['home'];S.screen='o_done';render();
+ noti('나들이 신청 완료',`${mdw(ob.date)} ${ob.short} 나들이 신청을 마쳤어요. 혼자 연습도 열렸어요`);const last=S.notis[S.notis.length-1];if(last)last.go='o_mine'};
+/* 운영자: 팀 저장 (팀 문서 + 신청서의 team·status) */
+async function rPushTeams(oid){const db=await myDB();if(!db||SES.role!=='admin')return false;const ev=EV(oid);const ps=persons(oid);const P=pid=>ps.find(p=>p.pid===pid);
+ const prev=REMOTE.teamIds[oid]||[];const now=[];
+ try{for(let i=0;i<ev.teams.length;i++){const tm=ev.teams[i];const no=i+1;const id=oid+'_'+no;now.push(id);const ms=tm.members.map(P).filter(Boolean);const ti=teamInfo(oid,tm);
+   const fr=(tm.friends||[]).filter(f=>f.tid&&tutor(f.tid)&&tutor(f.tid).acct);
+   const doc={oid,teamNo:no,memberAccts:[...new Set(ms.map(p=>p.a.acct))],friendAccts:[...new Set(fr.map(f=>tutor(f.tid).acct))],
+    members:ms.map(p=>p.comp?{acct:p.a.acct,name:p.name,levels:p.a.lv,companion:true,rel:p.rel||''}:{acct:p.a.acct,name:p.name,levels:p.a.lv}),
+    friends:fr.map(f=>({acct:tutor(f.tid).acct,name:tutor(f.tid).name,helps:f.pids.slice()})),warn:!!ti.warn,confirmed:ev.st==='confirmed'&&ms.every(p=>p.comp||p.a.st==='team'),updatedAt:Date.now()};
+   await db.doc('baep_outing_teams/'+id).set(doc);tm.id=id;tm.no=no;tm.raw=doc;
+   for(const acct of doc.memberAccts){const a=OUT.apps.find(x=>x.id===docId(oid,acct));if(!a)continue;
+    const upd={};if(a.team!==id)upd.team=id;if(a.status==='applied')upd.status='assigned';   /* team = 팀 문서 번호 (예: o1_1) */
+    if(Object.keys(upd).length){await db.doc('baep_outing_apps/'+a.id).update(upd);Object.assign(a,upd)}}}
+  for(const id of prev)if(!now.includes(id))await db.doc('baep_outing_teams/'+id).delete();
+  REMOTE.teamIds[oid]=now;
+  await db.doc('baep_outings/'+oid).set({oid,applied:ps.length,teams:ev.teams.length,updatedAt:Date.now()},{merge:true});REMOTE.counts[oid]=ps.length;
+  return true}
+ catch(e){console.warn('[feat-outing] 팀 저장 실패',e);toast('팀을 저장하지 못했어요. 운영자 권한과 인터넷 연결을 확인해 주세요',4200);return false}}
+/* 운영자: 확정 → 신청서 status 'confirmed' + 문자 기록(baep_sms) + 팀 문서 confirmed */
+async function rConfirm(oid){const db=await myDB();if(!db||SES.role!=='admin')return false;const ev=EV(oid);
+ try{for(const tm of ev.teams){for(const pid of tm.members){const p=pById(oid,pid);if(!p||p.comp)continue;const a=p.a;if(a.status==='confirmed')continue;
+    await db.doc('baep_outing_apps/'+a.id).update({status:'confirmed'});a.status='confirmed';
+    await db.doc('baep_sms/out_'+a.id+'_'+Date.now().toString(36)).set({kind:'나들이 팀 확정',oid,teamNo:tm.no||0,acct:a.acct,to:a.name+(a.comp?` 외 1명(${a.comp.name})`:''),ph:a.ph||'',body:smsShort(a),st:'기록',createdAt:Date.now()})}
+   await db.doc('baep_outing_teams/'+tm.id).update({confirmed:true});tm.confirmed=true}
+  return true}
+ catch(e){console.warn('[feat-outing] 확정 저장 실패',e);toast('확정을 저장하지 못했어요. 다시 눌러 주세요',4200);return false}}
+addEventListener('baep:session',()=>{pickStore();if(OUT.remote){REMOTE.at=0;rLoad(true)}});
+addEventListener('baep:logout',()=>{REMOTE=emptyRemote();OUT=LOCAL});
 
 /* =====================================================================
    2. AI 팀 배정 (시연용 규칙 기반)
@@ -139,7 +252,7 @@ const unitsOf=ps=>{const m={};ps.forEach(p=>{(m[p.a.id]=m[p.a.id]||[]).push(p)})
 const knownTid=a=>a&&a.known||null;
 const myKnown=()=>(S.booking&&S.booking.tid)||((S.history||[])[0]||{}).tid||null;
 function friendPool(o){const at=PL[o.pk]||PL.cafe;
- return TUTORS.filter(t=>t.approved!==false&&!t.blocked&&(t.topics||[]).some(k=>o.topics.includes(k)))
+ return TUTORS.filter(t=>t.approved!==false&&!t.blocked&&!t.stub&&!(OUT.remote&&(t.fake||!t.acct||t.id==='me'))&&(t.topics||[]).some(k=>o.topics.includes(k)))
   .map(t=>({t,s:(t.topics||[]).filter(k=>o.topics.includes(k)).length*10-kmBetween(at,t)})).sort((a,b)=>b.s-a.s).map(x=>x.t)}
 /* 팀마다 프렌드 정하고, 배움님을 두 명씩 나눠 맡기기 */
 function staff(oid){const o=OB(oid),ev=EV(oid);const pool=friendPool(o);const used=new Set();const ps=persons(oid);const P=pid=>ps.find(p=>p.pid===pid);
@@ -332,6 +445,7 @@ const people=f=>1+(f&&f.comp?1:0);
 function entryCard(){const n=OUTINGS.length;const o=OUTINGS[0];
  return `<button class="o-entry" data-a="o-list"><span class="o-entry-ic">${I('users')}</span><span class="o-entry-tx"><em>새로 생겼어요</em><b>이웃과 함께 나들이</b><small>카페에서 키오스크로 주문하고, 공원 산책·사진 미션 뒤 택시를 직접 불러 집에 가요 · ${md(o.date)} 외 ${n-1}개</small></span>${I('back','j-chev')}</button>`}
 function statusCard(a){const o=OB(a.oid);
+ if(a.remote&&!a.paid)return `<button class="rq no" data-a="o-mine"><span class="rq-st">${I('card')} 나들이 · 결제 대기</span><b>${o.short} 나들이<br>참가비 결제가 아직 안 됐어요</b><span class="rq-when">${mdw(o.date)} ${o.start} · ${o.place}</span><span class="rq-go">결제를 마치면 신청이 끝나요 ›</span></button>`;
  if(a.st==='team'){const tm=teamOf(a.oid,a.id);const ti=tm&&teamInfo(a.oid,tm);const fr=tm?(tm.friends||[]).filter(f=>f.tid).map(f=>tutor(f.tid).name).join('·'):'';
   return `<button class="rq ok" data-a="o-mine"><span class="rq-st">${I('check')} 나들이 팀 확정</span><b>${mdw(o.date)} ${o.start}<br>${ti?ti.ps.filter(p=>p.pid!==a.id).map(p=>fname(p.name)).join('·')+' 님과 함께해요':o.short+' 나들이'}</b><span class="rq-when">${I('pin')} ${o.place}</span><span class="rq-go">프렌드 ${fr} · 자세히 보기 ›</span></button>`}
  return `<button class="rq wait" data-a="o-mine"><span class="rq-st"><i class="dot"></i>나들이 · 팀 배정 중</span><b>${o.short} 나들이<br>팀을 짜고 있어요</b><span class="rq-when">${mdw(o.date)} ${o.start} · ${o.place}</span><span class="rq-go">팀이 정해지면 알림과 문자로 알려드려요 ›</span></button>`}
@@ -424,16 +538,18 @@ SC.o_comp=()=>{const f=O().f;if(!f)return SC.o_detail();const o=OB(f.oid);const 
 
 /* ③ 결제 */
 SC.o_pay=()=>{const f=O().f;if(!f)return SC.o_detail();const o=OB(f.oid);const n=CFG.COMPANION_PAYS?people(f):1;const amt=PRICE*n;
- const kid=S.sr.byChild&&f.payer==='child';const methods=['카카오페이','토스페이','카카오뱅크','신용·체크카드'];
+ const childOk=S.sr.byChild&&DEMO_MODE&&!OUT.remote;const kid=childOk&&f.payer==='child';const methods=['카카오페이','토스페이','카카오뱅크','신용·체크카드'];
  const sum=`<div class="card sum o-sum"><div><dt>나들이</dt><dd>${o.title}</dd></div><div><dt>일시</dt><dd>${mdw(o.date)} ${range(o.start,CFG.HOURS*60)}</dd></div><div><dt>모이는 곳</dt><dd>${o.place}</dd></div>
   <div><dt>참가 인원</dt><dd>배움님 ${esc(S.sr.name)}${f.comp?` + ${esc(f.cname)}(${f.crel})`:''} · ${people(f)}명</dd></div>
   <div><dt>참가비</dt><dd class="tabnum">${won(CFG.PRICE_PER_HOUR)} × ${CFG.HOURS}시간${n>1?` × ${n}명`:''}</dd></div>
   <div style="border-top:1px solid var(--line);padding-top:.5em"><dt>결제할 금액</dt><dd class="tabnum" style="font-size:1.25em">${won(amt)}</dd></div></div>`;
- const seg=S.sr.byChild?`<div class="sec">누가 결제할까요?</div><div class="seg"><button class="${kid?'':'on'}" data-a="o-payer" data-v="self">제가 할게요</button><button class="${kid?'on':''}" data-a="o-payer" data-v="child">자녀에게 부탁</button></div>`:'';
+ const seg=childOk?`<div class="sec">누가 결제할까요?</div><div class="seg"><button class="${kid?'':'on'}" data-a="o-payer" data-v="self">제가 할게요</button><button class="${kid?'on':''}" data-a="o-payer" data-v="child">자녀에게 부탁</button></div>`:'';
  let body,foot;
  if(kid){body=f.childSent?`<div class="card c-due"><span class="c-pill">요청 보냄</span><b>자녀분이 결제하면 신청이 끝나요</b><span class="small muted">${esc(S.sr.cphone||'010-0000-0000')}(으)로 나들이 참가비 결제 요청 문자를 보냈어요.</span></div>${demo([['자녀 휴대폰에서 결제하기','o-child-pay']])}`
    :`<div class="card"><b>${I('msg')} 자녀분께 결제 요청 문자를 보내요</b><p class="small muted" style="margin:.4em 0 0">받는 번호 <b>${esc(S.sr.cphone||'010-0000-0000')}</b> · 자녀분이 문자 링크를 눌러 결제해요.</p></div>`;
   foot=f.childSent?`<footer class="cta c-two"><button class="btn ghost" data-a="o-child-send">다시 보내기</button><button class="btn y" data-a="o-payer" data-v="self">제가 직접 결제할게요</button></footer>`:`<footer class="cta"><button class="btn b" data-a="o-child-send">자녀분께 결제 요청 보내기</button></footer>`}
+ else if(OUT.remote){body=`<div class="sec">결제 방법</div><div class="card tp-info"><span>${I('card')}</span><span><b>다음 화면에서 골라요</b><small class="muted">카카오페이 · 토스페이 · 네이버페이 · 페이코 · 카드 · 계좌이체</small></span></div>`;
+  foot=`<footer class="cta"><button class="btn y" data-a="o-pay">${won(amt)} 결제하기</button></footer>`}
  else{body=`<div class="sec">결제 방법</div>${methods.map(m=>`<button class="opt${S.method===m?' on':''}" data-a="method" data-v="${m}"><span class="oi">${I(m.includes('카드')?'card':'won')}</span><span><b>${m}</b></span></button>`).join('')}`;
   foot=`<footer class="cta"><button class="btn y" data-a="o-pay">${won(amt)} 결제하기</button></footer>`}
  return hdr('나들이 결제')+`<main class="body">${steps(3,3)}${sum}${selfPay()}${seg}${body}
@@ -474,7 +590,13 @@ SC.o_done=()=>{const a=myApp();if(!a)return SC.o_list();const o=OB(a.oid);
 /* 내 나들이 (팀 배정 중 → 팀 확정) */
 SC.o_mine=()=>{const a=myApp();
  if(!a)return hdr('내 나들이')+`<main class="body"><div class="empty">아직 신청한 나들이가 없어요<br><button class="link" data-a="o-list">나들이 둘러보기</button></div></main>`;
- const o=OB(a.oid);const tm=a.st==='team'&&teamOf(a.oid,a.id);const ti=tm&&teamInfo(a.oid,tm);
+ const o=OB(a.oid);
+ if(a.remote&&!a.paid)return hdr('내 나들이')+`<main class="body">
+  <div class="rq no"><span class="rq-st">${I('card')} 결제 대기</span><b>${o.short} 나들이<br>참가비 결제가 아직 안 됐어요</b><span class="rq-go">결제를 마치면 신청이 끝나요</span></div>
+  <div class="card sum o-sum"><div><dt>나들이</dt><dd>${o.title}</dd></div><div><dt>일시</dt><dd>${mdw(o.date)} ${range(o.start,CFG.HOURS*60)}</dd></div><div><dt>참가 인원</dt><dd>${1+(a.comp?1:0)}명</dd></div><div><dt>참가비</dt><dd class="tabnum">${won(a.amt)}</dd></div></div>
+  <button class="btn y" data-a="o-repay">${won(a.amt)} 결제하기</button>
+  <button class="link" data-a="o-cancel" style="align-self:center">신청 지우기</button></main>`;
+ const tm=a.st==='team'&&teamOf(a.oid,a.id);const ti=tm&&teamInfo(a.oid,tm);
  const mineLv=`<div class="card" style="display:flex;flex-direction:column;gap:.5em"><b>내가 할 수 있는 것</b>${SKILLS.map(([k,t])=>`<div class="row" style="justify-content:space-between"><span>${t}</span><span class="o-lvp ${a.lv[k]==='self'?'hi':a.lv[k]==='help'?'mid':'lo'}">${LV[a.lv[k]][0]}</span></div>`).join('')}${a.comp?`<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding-top:.5em"><span>함께 가는 분</span><b>${esc(a.comp.name)} (${esc(a.comp.rel)})</b></div>`:''}</div>`;
  const when_=`<div class="o-big"><div class="big-when">${mdw(o.date)} ${range(o.start,CFG.HOURS*60)}</div><b>${o.title}</b><div class="o-place">${I('pin')}<span>${o.place}</span></div></div>`;
  if(!tm){const ev=EV(a.oid);
@@ -554,7 +676,7 @@ SC.mine=()=>{const h=_mine();const a=myApp();const i=h.lastIndexOf('</main>');if
 const _tab=A.tab;A.tab=v=>{if(S.o)S.o.prep=null;_tab(v)};
 
 /* 프렌드 홈: 나들이 배정 카드 */
-const myFriendIds=()=>{const ids=['me'];const a=S.me&&typeof ACCOUNTS!=='undefined'&&ACCOUNTS[S.me];if(!S.me||(a&&a.demo))ids.unshift('t1');return ids};
+const myFriendIds=()=>{const ids=['me'];if(OUT.remote&&S.me)ids.push('acc-'+S.me);const a=S.me&&typeof ACCOUNTS!=='undefined'&&ACCOUNTS[S.me];if(!S.me||(a&&a.demo))ids.unshift('t1');return ids};
 function friendJobs(){const ids=myFriendIds();const L=[];OUTINGS.forEach(o=>{const ev=EV(o.id);if(ev.st!=='confirmed')return;ev.teams.forEach(tm=>(tm.friends||[]).forEach(f=>{if(f.tid&&ids.includes(f.tid))L.push({o,ev,tm,f})}))});return L}
 const _thome=SC.thome;
 SC.thome=()=>{let h=_thome();const J=friendJobs();if(!J.length)return h;
@@ -575,7 +697,7 @@ SC.admin=()=>{let h=_admin();const n=adWait();
  if(S.ad.tab==='dash')h=h.replace('<h3 class="ad-h3">오늘 할 일</h3>',`<h3 class="ad-h3">오늘 할 일</h3><button class="ad-todo" data-a="ad-tab" data-v="outing"><span>나들이 팀 배정</span><b class="${n?'hot':''}">${n}명</b>${I('back','j-chev')}</button>`);
  return h};
 if(typeof AD_VIEW!=='undefined')AD_VIEW.outing=()=>{const oid=O().adEv||'o1';const o=OB(oid);const ev=EV(oid);const ps=persons(oid);const un=unassigned(oid);const apps=appsOf(oid);
- const locked=ev.st==='confirmed'&&!un.length;
+ const pend=ps.filter(p=>!p.comp&&p.a.st!=='team'&&teamOf(oid,p.pid));const locked=ev.st==='confirmed'&&!un.length&&!pend.length;const unpaid=unpaidOf(oid);
  const evs=`<div class="o-evs">${OUTINGS.map(x=>{const e=EV(x.id);return `<button class="o-ev${x.id===oid?' on':''}" data-a="o-ad-ev" data-v="${x.id}"><b>${mdw(x.date)} ${x.start} · ${x.short}</b><small>신청 ${persons(x.id).length}명 / ${cap(x)}자리 · ${e.st==='confirmed'?'확정':e.st==='ai'?'AI 배정됨':'배정 전'}</small></button>`}).join('')}</div>`;
  const kpi=`<div class="ad-kpis tabnum"><div><small>신청</small><b>${apps.length}건</b><span>동반 포함 배움님 ${ps.length}명</span></div><div><small>팀</small><b>${ev.teams.length}팀</b><span>팀당 최대 ${CFG.MAX_PER_TEAM}명</span></div>
   <div><small>필요한 프렌드</small><b>${ev.teams.reduce((s,t)=>s+Math.ceil(t.members.length/CFG.SENIORS_PER_FRIEND),0)||Math.ceil(ps.length/CFG.SENIORS_PER_FRIEND)}명</b><span>1명이 배움님 ${CFG.SENIORS_PER_FRIEND}명</span></div>
@@ -584,6 +706,7 @@ if(typeof AD_VIEW!=='undefined')AD_VIEW.outing=()=>{const oid=O().adEv||'o1';con
  const table=`<div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>이름</th><th>나이</th><th>동네</th><th>할 수 있는 것 (키오스크·택시·카톡)</th><th>수준</th><th>동반</th><th>결제</th><th>신청일</th><th>팀</th></tr></thead><tbody>
   ${ps.map(p=>{const t=teamOf(oid,p.pid);return `<tr class="${p.a.me?'newrow':''}"><td><b>${p.comp?'└ ':''}${esc(p.name)}</b>${p.a.me&&!p.comp?' <span class="ad-pill new">방금 신청</span>':''}</td><td>${p.age||'-'}</td><td>${esc(p.dong)}</td><td>${p.comp?'<span class="muted small">신청자와 같게 봐요</span>':sk3(p.a.lv)}</td><td>${lvPill(p.score)}</td>
    <td>${p.comp?`${esc(p.rel)} · 동반`:p.a.comp?`${esc(p.a.comp.name)} (${esc(p.a.comp.rel)})`:'-'}</td><td>${p.comp?'':`${esc(p.a.payer)} · ${won(p.a.amt)}`}</td><td>${p.comp?'':p.a.paidAt}</td><td>${t?`<b>${t.name}</b>`:'<span class="ad-pill wait">배정 전</span>'}</td></tr>`}).join('')||'<tr><td colspan="9" class="muted">아직 신청자가 없어요</td></tr>'}
+  ${unpaid.map(a=>`<tr><td><b>${esc(a.name)}</b>${a.comp?` <small class="muted">+ ${esc(a.comp.name)}</small>`:''}</td><td>${a.age||'-'}</td><td>${esc(a.dong)}</td><td>${sk3(a.lv)}</td><td>${lvPill(a.score)}</td><td>${a.comp?`${esc(a.comp.name)} (${esc(a.comp.rel)})`:'-'}</td><td><span class="ad-pill wait">결제 대기</span></td><td>-</td><td><span class="muted small">결제 후 배정</span></td></tr>`).join('')}
   </tbody></table></div>`;
  const opts=(pid)=>{const cur=teamOf(oid,pid);return `<select data-o-move="${pid}" aria-label="팀 옮기기" ${locked?'disabled':''}><option value="">${cur?cur.name+'에 있어요 · 다른 팀으로 옮기기':'팀 고르기'}</option>${ev.teams.filter(t=>t!==cur).map(t=>`<option value="${t.id}">${t.name}(으)로 옮기기 (${t.members.length}명)</option>`).join('')}<option value="new">새 팀 만들기</option></select>`};
  const teams=ev.teams.length?`<div class="o-ai">${I('users')}<span>${AI_MSG}. 사람을 옮기려면 이름 아래 칸에서 팀을 고르세요. 동반 신청한 분은 함께 옮겨져요.</span></div>
@@ -594,7 +717,7 @@ if(typeof AD_VIEW!=='undefined')AD_VIEW.outing=()=>{const oid=O().adEv||'o1';con
    ${ti.warn?`<div class="o-warn">${I('info')}<span>${GAP_MSG}</span></div>`:''}</div>`}).join('')}</div>`:'';
  const bar=`<div class="o-adbar">
   ${ev.st==='confirmed'&&un.length?`<button class="btn b sm" data-a="o-ai" data-v="keep">새 신청자 ${un.length}명 배정</button>`:ev.st==='confirmed'?'':`<button class="btn b sm" data-a="o-ai">${ev.teams.length?'AI로 다시 배정':'AI 자동 배정'}</button>`}
-  ${ev.teams.length&&!locked?`<button class="btn y sm" data-a="o-confirm" ${un.length?'disabled':''}>확정하고 문자 보내기</button>`:''}
+  ${ev.teams.length&&!locked?`<button class="btn y sm" data-a="o-confirm" ${un.length?'disabled':''}>${ev.st==='confirmed'?'새로 배정한 분 확정하기':'확정하고 문자 보내기'}</button>`:''}${unpaid.length?`<span class="small muted">결제 대기 ${unpaid.length}건은 결제가 끝나면 배정할 수 있어요</span>`:''}
   ${locked?`<span class="ad-pill done">확정 · ${ev.at||''} 문자 보냄</span><span class="small muted">배움님 알림함·문자, 프렌드 홈에 팀이 보여요</span>`:un.length&&ev.teams.length?`<span class="small muted">아직 팀이 없는 분이 ${un.length}명 있어요</span>`:''}</div>`;
  return evs+kpi+rule+`<div class="card" style="display:flex;flex-direction:column;gap:.6em"><h3 class="ad-h3" style="margin:0">${o.title} · 신청자</h3>${table}</div>`+bar+teams};
 
@@ -628,7 +751,12 @@ Object.assign(A,{
   S.ad.smsLog.push({time:mslash(TODAYN)+' '+new Date().toTimeString().slice(0,5),to:'자녀 ('+S.sr.name+')',ph:S.sr.cphone||'010-0000-0000',kind:'나들이 결제 요청',body:`[배프] ${S.sr.name} 님이 ${mdw(o.date)} ${o.short} 나들이 참가비 결제를 부탁하셨어요. ${won(PRICE*(CFG.COMPANION_PAYS?people(f):1))} · 링크에서 결제해 주세요`,st:'발송 완료'});
   render();toast(re?'결제 요청 문자를 다시 보냈어요':'자녀분께 결제 요청 문자를 보냈어요')},
  'o-child-pay':()=>{O().ck={step:'review',card:0,agree:false,pin:'',child:true};render()},
- 'o-pay':()=>{O().ck={step:'review',card:0,agree:false,pin:'',child:false};render()},
+ 'o-pay':async()=>{pickStore();if(OUT.remote){const f=O().f;if(!f||O()._busy)return;O()._busy=true;const o=OB(f.oid);const n=people(f);
+   const r=await rApply(f);O()._busy=false;if(!r){toast('신청서를 저장하지 못했어요. 인터넷 연결을 확인해 주세요',3400);return}
+   if(r.paid){await rLoad(true);S.hist=['home'];S.screen='o_mine';render();return}
+   await rLoad(true);payOuting(r.id,r.amount,o,n);return}
+  O().ck={step:'review',card:0,agree:false,pin:'',child:false};render()},
+ 'o-repay':()=>{const a=myApp();if(!a||!a.remote||a.paid)return;payOuting(a.id,a.amt,OB(a.oid),1+(a.comp?1:0))},
  'o-ck-close':()=>{O().ck=null;render()},
  'o-ck-card':v=>{O().ck.card=+v;render()},
  'o-ck-agree':()=>{const c=O().ck;c.agree=!c.agree;render()},
@@ -637,14 +765,16 @@ Object.assign(A,{
  'o-ck-key':v=>{const c=O().ck;if(!c||c.step!=='pin')return;if(v==='지움')c.pin=c.pin.slice(0,-1);else if(v==='전체 지움')c.pin='';else if(c.pin.length<6)c.pin+=v;render();
   if(c.pin.length===6){c.step='wait';render();setTimeout(()=>{if(O().ck!==c)return;if(S.method.includes('카드')&&c.card===1){c.step='fail';render();return}payDone(c.child)},1300)}},
  /* 신청 취소: 휴대폰 기본 확인창 대신 '한 번 더 누르기'로 확인 */
- 'o-cancel':()=>{const a=myApp();if(!a)return;const o=O();if(!o.cancelAt||Date.now()-o.cancelAt>4000){o.cancelAt=Date.now();toast('한 번 더 누르면 신청이 취소돼요. 나들이 3일 전까지는 전액 환불돼요',4000);return}o.cancelAt=0;cancelMine();toast('신청을 취소했어요. 참가비는 결제한 수단으로 돌려드려요')},
- 'o-reset':()=>{cancelMine(true);toast('시연: 처음 상태로 되돌렸어요')},
- 'o-demo-confirm':()=>{const a=myApp();if(!a)return;const ev=EV(a.oid);if(ev.st!=='confirmed')aiAssign(a.oid);else if(!teamOf(a.oid,a.id))aiAssign(a.oid,true);
+ 'o-cancel':async()=>{const a=myApp();if(!a)return;
+  if(a.remote){if(a.paid){toast(`결제한 나들이 취소는 고객센터(${CFG.CS})로 연락해 주세요. 3일 전까지는 전액 환불돼요`,4200);return}
+   const db=await myDB();try{await db.doc('baep_outing_apps/'+a.id).delete();await rLoad(true);S.hist=[];S.screen='home';render();toast('신청을 지웠어요')}catch(e){toast('지우지 못했어요. 인터넷 연결을 확인해 주세요')}return}const o=O();if(!o.cancelAt||Date.now()-o.cancelAt>4000){o.cancelAt=Date.now();toast('한 번 더 누르면 신청이 취소돼요. 나들이 3일 전까지는 전액 환불돼요',4000);return}o.cancelAt=0;cancelMine();toast('신청을 취소했어요. 참가비는 결제한 수단으로 돌려드려요')},
+ 'o-reset':()=>{if(OUT.remote)return;cancelMine(true);toast('시연: 처음 상태로 되돌렸어요')},
+ 'o-demo-confirm':()=>{const a=myApp();if(!a||OUT.remote)return;const ev=EV(a.oid);if(ev.st!=='confirmed')aiAssign(a.oid);else if(!teamOf(a.oid,a.id))aiAssign(a.oid,true);
   confirmEv(a.oid);S.hist=['home'];S.screen='o_mine';render()},
  /* 운영자 */
- 'o-ad-ev':v=>{O().adEv=v;render()},
- 'o-ai':v=>{const oid=O().adEv||'o1';if(!persons(oid).length){toast('신청자가 없어요');return}aiAssign(oid,v==='keep');save();render();toast(v==='keep'?'새 신청자를 알맞은 팀에 넣었어요':`AI가 ${EV(oid).teams.length}팀으로 묶었어요. 확인하고 확정해 주세요`)},
- 'o-confirm':()=>{const oid=O().adEv||'o1';if(unassigned(oid).length){toast('팀이 없는 분이 있어요');return}const n=confirmEv(oid);render();toast(`팀을 확정했어요. 신청자 ${n}분(동반 포함 ${persons(oid).length}명)께 알림과 문자를 보냈어요`)}
+ 'o-ad-ev':v=>{O().adEv=v;render();if(OUT.remote)rLoad(true)},
+ 'o-ai':async v=>{const oid=O().adEv||'o1';if(!persons(oid).length){toast(unpaidOf(oid).length?'결제를 마친 신청자가 없어요':'신청자가 없어요');return}aiAssign(oid,v==='keep');save();render();if(OUT.remote){if(!await rPushTeams(oid))return;render()}toast(v==='keep'?'새 신청자를 알맞은 팀에 넣었어요':`AI가 ${EV(oid).teams.length}팀으로 묶었어요. 확인하고 확정해 주세요`)},
+ 'o-confirm':async()=>{const oid=O().adEv||'o1';if(unassigned(oid).length){toast('팀이 없는 분이 있어요');return}const n=confirmEv(oid);render();if(OUT.remote){if(!await rConfirm(oid))return;await rPushTeams(oid);render()}toast(`팀을 확정했어요. 신청자 ${n}분(동반 포함 ${persons(oid).length}명)께 알림과 문자를 보냈어요`)}
 });
 function moveUnit(oid,pid,to){const ev=EV(oid);const p=pById(oid,pid);if(!p)return;const unit=persons(oid).filter(x=>x.a.id===p.a.id).map(x=>x.pid);
  let dest=to==='new'?null:ev.teams.find(t=>t.id===to);
@@ -652,7 +782,7 @@ function moveUnit(oid,pid,to){const ev=EV(oid);const p=pById(oid,pid);if(!p)retu
  if(dest&&dest.members.filter(id=>!unit.includes(id)).length+unit.length>CFG.MAX_PER_TEAM){toast(`${dest.name}은(는) 이미 ${dest.members.length}명이에요. 팀당 최대 ${CFG.MAX_PER_TEAM}명이에요`);render();return}
  ev.teams.forEach(t=>t.members=t.members.filter(id=>!unit.includes(id)));
  if(!dest){dest={id:'T'+Date.now().toString(36),members:[],friends:[]};ev.teams.push(dest)}
- dest.members.push(...unit);ev.teams=ev.teams.filter(t=>t.members.length);staff(oid);save();render();
+ dest.members.push(...unit);ev.teams=ev.teams.filter(t=>t.members.length);staff(oid);save();render();if(OUT.remote)rPushTeams(oid).then(ok=>{if(ok)render()});
  toast(`${p.a.name} 님${other?`(동반 ${p.a.comp.name} 님과 함께)`:''}을 ${dest.name}(으)로 옮겼어요`)}
 document.addEventListener('change',e=>{const s=e.target;if(!s.matches||!s.matches('select[data-o-move]'))return;if(!s.value)return;moveUnit(O().adEv||'o1',s.dataset.oMove,s.value)});
 document.addEventListener('input',e=>{const f=S.o&&S.o.f;if(!f)return;if(e.target.id==='o-cname')f.cname=e.target.value;if(e.target.id==='o-cph')f.cph=e.target.value});
@@ -676,17 +806,22 @@ const banner=(t,b)=>{const n=document.getElementById('noti');if(!n)return;n.inne
 function deliver(){let ch=false;
  if(S.member&&S.member.mentee&&SENIOR_TAB[S.screen]){
   /* 다른 기기에서 저장된 내 신청(S.outing)을 이 폰 저장소로 */
-  if(S.outing&&S.outing.id&&!OUT.apps.some(x=>x.id===S.outing.id)&&S.outing.st!=='cancel'){OUT.apps.push(JSON.parse(JSON.stringify(S.outing)));save()}
+  if(OUT===LOCAL&&S.outing&&S.outing.id&&!OUT.apps.some(x=>x.id===S.outing.id)&&S.outing.st!=='cancel'){OUT.apps.push(JSON.parse(JSON.stringify(S.outing)));save()}
   const a=myApp();if(a)(a.notis||[]).forEach(n=>{if(!S.notis.some(x=>x.oid===n.id)){S.notis.push({id:Date.now()+Math.random(),oid:n.id,ic:'users',t:n.t,b:n.b,time:n.shown?'오늘':'방금',go:'o_mine',read:!!n.read});ch=true}
-   if(!n.shown){n.shown=true;save();banner(n.t,n.b)}})}
+   if(!n.shown){n.shown=true;if(a.remote)seenSet(n.id,1);save();banner(n.t,n.b)}})}
  if(S.member&&S.member.mentor&&typeof TUTOR_TAB!=='undefined'&&TUTOR_TAB[S.screen]){friendJobs().forEach(({o,ev,f})=>{ev.fnoti=ev.fnoti||{};const key='of'+o.id+f.tid;const t='나들이 배정',m=`${mdw(o.date)} ${o.short} 나들이 · 배움님 ${f.pids.length}명을 맡아요`;
   if(!S.tnotis.some(x=>x.oid===key)){S.tnotis.push({id:Date.now()+Math.random(),oid:key,ic:'bell',t,b:m,time:ev.fnoti[f.tid]?'오늘':'방금',read:false});ch=true}
-  if(!ev.fnoti[f.tid]){ev.fnoti[f.tid]=1;save();banner(t,m)}})}
+  if(!ev.fnoti[f.tid]&&OUT.remote&&seenGet()[key])ev.fnoti[f.tid]=1;
+  if(!ev.fnoti[f.tid]){ev.fnoti[f.tid]=1;if(OUT.remote)seenSet(key,1);save();banner(t,m)}})}
  return ch}
 /* 알림 탭을 열면 읽음으로 (다시 로그인해도 빨간 숫자가 다시 뜨지 않게) */
-const _notis=SC.notis;SC.notis=()=>{const a=myApp();if(a){let c=false;S.notis.forEach(x=>{if(x.oid){const n=(a.notis||[]).find(n=>n.id===x.oid);if(n&&!n.read){n.read=true;c=true}}});if(c)save()}return _notis()};
+const _notis=SC.notis;SC.notis=()=>{const a=myApp();if(a){let c=false;S.notis.forEach(x=>{if(x.oid){const n=(a.notis||[]).find(n=>n.id===x.oid);if(n&&!n.read){n.read=true;c=true;if(a.remote)seenSet(n.id,2)}}});if(c)save()}return _notis()};
 const _render=render;
-render=function(){if(!S.o)O();hookPaid();_render();if(deliver())_render()};
+render=function(){if(!S.o)O();pickStore();hookPaid();_render();if(deliver())_render();
+ /* 진짜 계정: 나들이 화면·홈을 열 때 가끔(15초마다) 다시 읽어요 */
+ if(OUT.remote&&(/^o_/.test(S.screen)||['home','thome'].includes(S.screen)||(S.screen==='admin'&&S.ad.tab==='outing')))rLoad(false)};
+/* 운영자 화면 '나들이 팀 배정' 을 열면 바로 읽기 */
+const _adTab=A['ad-tab'];A['ad-tab']=v=>{_adTab(v);if(v==='outing'&&OUT.remote)rLoad(true)};
 /* 시연용: 개발자 도구에서 살펴보기 */
 window.BAEP_OUTING={CFG,OUTINGS,store:()=>OUT,aiAssign:(oid)=>{aiAssign(oid||'o1');save();render()},confirm:(oid)=>{confirmEv(oid||'o1');render()},reset:()=>{OUT=seed();save();render()}};
 
