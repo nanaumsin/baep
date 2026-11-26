@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 배프 로고: 파란 원 + 노란 원, 겹친 곳에 웃는 얼굴 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:fillColor="#8DC1EC"
+        android:pathData="M43,54m-20,0a20,20 0,1 0,40 0a20,20 0,1 0,-40 0"/>
+    <path android:fillColor="#F3D86A"
+        android:pathData="M65,54m-20,0a20,20 0,1 0,40 0a20,20 0,1 0,-40 0"/>
+    <path android:fillColor="#97AE6C"
+        android:pathData="M54,37.3A20,20 0,0 1,54 70.7A20,20 0,0 1,54 37.3Z"/>
+    <path android:fillColor="#1E2833"
+        android:pathData="M50.5,50m-1.9,0a1.9,1.9 0,1 0,3.8 0a1.9,1.9 0,1 0,-3.8 0"/>
+    <path android:fillColor="#1E2833"
+        android:pathData="M57.5,50m-1.9,0a1.9,1.9 0,1 0,3.8 0a1.9,1.9 0,1 0,-3.8 0"/>
+    <path android:strokeColor="#1E2833"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M49.8,57Q54,61.5 58.2,57"/>
+</vector>

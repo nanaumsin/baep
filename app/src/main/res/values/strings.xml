@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">배프</string>
+    <string name="popup_close">✕  닫고 배프로 돌아가기</string>
+    <string name="press_again_to_exit">한 번 더 누르면 앱이 닫혀요</string>
+    <string name="no_app_found">이 결제·연결에 필요한 앱을 찾지 못했어요</string>
+</resources>

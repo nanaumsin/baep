@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 안드로이드 12 이상: 앱을 켤 때 잠깐 보이는 시작 화면 -->
+    <style name="Theme.Baep" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/baep_bg</item>
+        <item name="android:colorPrimary">@color/baep_blue</item>
+        <item name="android:colorAccent">@color/baep_blue</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowSplashScreenBackground">@color/baep_sky_light</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+    </style>
+</resources>

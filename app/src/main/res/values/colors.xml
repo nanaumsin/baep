@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="baep_bg">#FFF6FAFD</color>
+    <color name="baep_sky">#FFCFE6F8</color>
+    <color name="baep_sky_light">#FFEAF5FD</color>
+    <color name="baep_blue">#FF2C77BA</color>
+    <color name="baep_blue_ink">#FF1B4F80</color>
+    <color name="baep_butter">#FFFFE27A</color>
+    <color name="baep_ink">#FF1E2833</color>
+    <color name="baep_line">#FFDCE6EF</color>
+</resources>

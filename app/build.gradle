@@ -1,0 +1,41 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'kr.baepu.app'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "kr.baepu.app"
+        minSdk 26          // 안드로이드 8.0 이상 (거의 모든 안드로이드폰)
+        targetSdk 36
+        versionCode 1
+        versionName "1.0"
+    }
+
+    // 웹 화면 파일은 프로젝트 맨 위의 web/ 폴더에 있어요.
+    // HTML을 고치면 web/ 안의 파일만 바꾸고 다시 실행하면 돼요.
+    sourceSets {
+        main {
+            assets.srcDirs = ['../web']
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.activity:activity:1.10.1'
+    implementation 'androidx.core:core:1.16.0'
+    implementation 'androidx.webkit:webkit:1.13.0'
+}
