@@ -54,7 +54,7 @@ const ALLOWED_AMOUNTS = new Set([
 /* ALLOWED_ORIGINS 를 비워두면 이 주소들만 허용해요.
    - 깃허브 페이지 주소
    - 안드로이드 앱(웹뷰) 안의 주소 */
-const DEFAULT_ORIGINS = ['https://hohowww12.github.io', 'https://appassets.androidplatform.net'];
+const DEFAULT_ORIGINS = ['https://nanaumsin.github.io', 'https://hohowww12.github.io', 'https://appassets.androidplatform.net'];
 
 const STATE_TTL_SEC = 10 * 60; // 로그인 시작 후 10분 안에 끝내야 해요
 const NONCE_COOKIE = '__Host-baep_oauth'; // 로그인을 시작한 브라우저와 끝낸 브라우저가 같은지 확인하는 쿠키
