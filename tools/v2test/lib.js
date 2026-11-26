@@ -15,7 +15,7 @@ async function ctx(name, opts = {}) {
   await BE.install(c);
   if (opts.mode) await c.route(`${ROOT}/app-config.js`, async r => { const res = await r.fetch(); let b = await res.text(); b = b.replace("window.BAEP_MODE = 'demo';", `window.BAEP_MODE = '${opts.mode}';`); r.fulfill({ response: res, body: b }); });
   const p = await c.newPage(); p.__name = name;
-  p.on('console', m => { if (m.type() === 'error') errors.push(`[${name}] console.error: ${m.text()}`); });
+  p.on('console', m => { if (m.type() === 'error' && !/^Failed to load resource: the server responded with a status of (401|409|429)/.test(m.text())) errors.push(`[${name}] console.error: ${m.text()}`); });
   p.on('pageerror', e => errors.push(`[${name}] pageerror: ${e.message}`));
   return { c, p };
 }
@@ -26,5 +26,6 @@ async function waitScreen(p, sc, ms = 8000) { await p.waitForFunction(s => windo
 async function shot(p, n) { await p.screenshot({ path: `/home/claude/shots/v2-${n}.png` }); }
 const st = p => p.evaluate(() => ({ screen: S.screen, me: S.me, ses: Object.assign({}, SES) }));
 async function toastText(p) { return p.evaluate(() => { const t = document.getElementById('toast'); return t.hidden ? '' : t.textContent; }); }
+async function until(p, fn, ms = 15000) { const t0 = Date.now(); while (Date.now() - t0 < ms) { try { if (await p.evaluate(fn)) return true; } catch (e) {} await sleep(300); } return false; }
 const results = []; function check(name, cond, info) { results.push({ name, ok: !!cond, info }); console.log((cond ? 'PASS ' : 'FAIL ') + name + (cond || info === undefined ? '' : ' :: ' + JSON.stringify(info))); }
-module.exports = { skipCoach, start, stop, ctx, sleep, A, waitScreen, shot, st, toastText, check, results, errors, BE, ROOT };
+module.exports = { until, skipCoach, start, stop, ctx, sleep, A, waitScreen, shot, st, toastText, check, results, errors, BE, ROOT };

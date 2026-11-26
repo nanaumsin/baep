@@ -902,7 +902,7 @@ const AUTH_MSG={BAD_LOGIN:'아이디나 비밀번호가 맞지 않아요',LOCKED
  NET:'인터넷 연결을 확인해 주세요',AUTH_REQUIRED:'다시 로그인해 주세요',BAD_TOKEN:'다시 로그인해 주세요',NO_SERVER:'아직 서버 설정 전이에요. 운영자에게 알려 주세요',
  PAY_IN_PROGRESS:'다른 화면에서 결제하고 있어요. 잠시 후 다시 확인해 주세요',NOT_PAYABLE:'프렌드가 수락한 뒤에 결제할 수 있어요',NOT_OWNER:'내 예약만 결제할 수 있어요',
  BAD_AMOUNT:'결제 금액이 맞지 않아요. 처음부터 다시 해 주세요',REF_NOT_FOUND:'결제할 예약을 찾지 못했어요',DB:'잠깐 연결이 안 돼요. 잠시 뒤 다시 해 주세요'};
-const errMsg=r=>(r&&AUTH_MSG[r.code])||(r&&r.message)||'잠시 후 다시 해 주세요';
+const errMsg=r=>(r&&r.code==='LOCKED'&&+r.retryAfter>0)?`여러 번 틀려서 ${Math.max(1,Math.ceil(r.retryAfter/60))}분 동안 잠겼어요. 잠시 후 다시 해 주세요`:(r&&AUTH_MSG[r.code])||(r&&r.message)||'잠시 후 다시 해 주세요';
 /* o.bearer: 지금 Firebase 로그인한 사람의 ID 토큰을 붙여요 (결제 승인·탈퇴·간편로그인 가입) */
 async function api(path,body,o={}){if(!WORKER)return {ok:false,code:'NO_SERVER'};
  const h={};if(body)h['Content-Type']='application/json';
@@ -959,7 +959,7 @@ function lreqPut(rid,d,merge){const all=lreqAll();all[rid]=merge?Object.assign({
  _lreqMem=all;lss(LREQ_K,JSON.stringify(all));setTimeout(lreqFire,0)}
 addEventListener('storage',e=>{if(e.key===LREQ_K)lreqFire()});
 const lreqOn=fn=>{_lreqFns.add(fn);setTimeout(()=>{if(_lreqFns.has(fn))fn(lreqAll())},0);return ()=>{_lreqFns.delete(fn)}};
-async function reqWrite(rid,data,remote){if(!remote){lreqPut(rid,data);return true}const db=await myDB();if(!db)return false;
+async function reqWrite(rid,data,remote){if(!remote){lreqPut(rid,data);return true}const db=await myDB();if(!db)return false;data=JSON.parse(JSON.stringify(data));   // undefined 값은 Firestore 가 거절해요
  try{return await within(db.doc('baep_requests/'+rid).set(data).then(()=>true),12000,false)}catch(e){console.warn('[배프] 요청 저장 실패',e);return false}}
 async function reqUpdate(rid,data,remote){if(!remote){lreqPut(rid,data,true);return true}const db=await myDB();if(!db)return false;
  try{return await within(db.doc('baep_requests/'+rid).update(data).then(()=>true),12000,false)}catch(e){console.warn('[배프] 요청 수정 실패',e);return false}}
@@ -1021,6 +1021,7 @@ async function updateProfile(){const db=await myDB();if(!db||SES.role!=='mentor'
 async function enterAccount(acct,role,o={}){const a=await loadOwnAcct(acct);if(!a)return false;a.role=role||a.role;
  if(a.role!=='mentee'&&a.role!=='mentor')return false;ACCOUNTS[acct]=a;
  S.login.err='';S.me=acct;S.hist=[];const via=o.via?` (${o.via})`:'';
+ if(a.role==='mentee')await within(loadFriends(true),8000);   // 예약했던 진짜 프렌드 정보를 먼저 받아와요
  if(a.role==='mentee'){Object.assign(S.sr,a.sr||{});S.sr.pw='';S.sr.pw2='';loadState(a);setHome();S.member.mentee=true;S.screen='home';render();watchReq();if(!o.quiet)toast((S.sr.name||'')+' 님, 어서 오세요'+via)}
  else{Object.assign(S.tu,a.tu||{});S.tu.pw='';S.tu.pw2='';loadState(a);S.tu.approved=!!a.approved;S.member.mentor=true;if(a.approved)addMe();S.screen=a.approved?'thome':'tpending';render();if(a.approved)watchInbox();if(!o.quiet)toast((S.tu.name||'')+' 프렌드님, 어서 오세요'+via)}
  try{dispatchEvent(new CustomEvent('baep:session',{detail:{acct,role:a.role,live:true}}))}catch(e){}
@@ -1048,7 +1049,8 @@ const SAVE_FAIL='저장소에 저장하지 못했어요. 이 화면을 닫으면
 const DUR={60:{l:'1시간',p:20000,pay:18000},90:{l:'1시간 30분',p:25000,pay:22500}};
 const endT=(t,m)=>{const[h,mm]=t.split(':').map(Number);const e=h*60+mm+ +m;return String(Math.floor(e/60)).padStart(2,'0')+':'+String(e%60).padStart(2,'0')};
 const range=(t,m)=>`${t}~${endT(t,m)}`;
-const tutor=id=>TUTORS.find(t=>t.id===id);
+const _tStub={};   /* 아직 목록을 못 받아온(또는 승인이 풀린) 진짜 프렌드 — 화면이 깨지지 않게 이름만 있는 임시 카드 */
+const tutor=id=>TUTORS.find(t=>t.id===id)||(typeof id==='string'&&id.startsWith('acc-')?(_tStub[id]=_tStub[id]||{id,acct:id.slice(4),stub:true,name:'프렌드',school:'',major:'',age:21,gender:'여',lat:37.25,lon:127.07,rad:3,rating:5.0,reviews:0,price:20000,color:'#CDEBDD',approved:true,intro:'',topics:['taxi'],tags:[],wd:[],slots:[],full:{},revs:[]}):undefined);
 
 /* 수원시 영통구 일대 지도. 역·광교호수공원 좌표는 실제 위치(위키백과), 도로·건물은 단순화한 모양 */
 const GEO={lon0:127.033,lat1:37.290,kx:6000,ky:7515,W:360,H:406,pxkm:67.7};
@@ -2771,8 +2773,8 @@ A['tp-go']=async()=>{if(!TP||!TP.w||TP.busy)return;TP.busy=true;TP.err='';tpDraw
 /* 1:1 수업 결제: 진짜 요청(Firestore)이면 진짜 결제창 → 서버 승인, 아니면(시연) 연습 결제창 */
 const remoteLesson=()=>!!(S.req&&S.req.remote&&S.req.rid);
 const lessonName=()=>{const t=tutor(S.tid)||{name:''};return `배프 1:1 수업 · ${t.name} 프렌드 (${DUR[S.dur].l})`};
-const _ckPay=A.pay;A.pay=()=>{if(remoteLesson()){window.BAEP_TOSS_PAY({amount:S.req.amount||DUR[S.dur].p,orderName:lessonName(),kind:'lesson',refId:S.req.rid,who:'self'});return}_ckPay()};
-const _cPayNow=A['c-paynow'];A['c-paynow']=()=>{const k=S.child.req;if(!k)return;if(remoteLesson()){Object.assign(S,{tid:k.tid,day:k.day,slot:k.slot,place:k.place,dur:k.dur});window.BAEP_TOSS_PAY({amount:S.req.amount||DUR[S.dur].p,orderName:lessonName(),kind:'lesson',refId:S.req.rid,who:'child'});return}_cPayNow()};
+const _ckPay=A.pay;A.pay=()=>{if(remoteLesson()){if(S.req.st!=='ok'){toast(AUTH_MSG.NOT_PAYABLE,3000);return}window.BAEP_TOSS_PAY({amount:S.req.amount||DUR[S.dur].p,orderName:lessonName(),kind:'lesson',refId:S.req.rid,who:'self'});return}_ckPay()};
+const _cPayNow=A['c-paynow'];A['c-paynow']=()=>{const k=S.child.req;if(!k)return;if(remoteLesson()){if(S.req.st!=='ok'){toast(AUTH_MSG.NOT_PAYABLE,3000);return}Object.assign(S,{tid:k.tid,day:k.day,slot:k.slot,place:k.place,dur:k.dur});window.BAEP_TOSS_PAY({amount:S.req.amount||DUR[S.dur].p,orderName:lessonName(),kind:'lesson',refId:S.req.rid,who:'child'});return}_cPayNow()};
 /* 서버 승인 뒤: 결제 상태는 서버가 쓴 문서(paid:true)로만 확인해요 */
 window.BAEP_WAIT_PAID=(path,ms)=>new Promise(async res=>{const db=await myDB();if(!db){res(null);return}let un=null,fin=false;
  const end=v=>{if(fin)return;fin=true;clearTimeout(t);try{un&&un()}catch(e){}res(v)};const t=setTimeout(()=>end(null),ms||20000);

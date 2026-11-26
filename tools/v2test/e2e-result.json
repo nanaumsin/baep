@@ -1,0 +1,402 @@
+{
+ "results": [
+  {
+   "name": "signup: short password rejected client-side",
+   "ok": true,
+   "info": "비밀번호는 6자 이상 64자 이하로 적어 주세요"
+  },
+  {
+   "name": "mentee signup → home as kimbok (server session)",
+   "ok": true,
+   "info": {
+    "screen": "home",
+    "me": "kimbok",
+    "ses": {
+     "acct": "kimbok",
+     "role": "mentee",
+     "uid": "acct:kimbok",
+     "provider": "password"
+    }
+   }
+  },
+  {
+   "name": "account doc has no pw / role from server",
+   "ok": true,
+   "info": [
+    "date",
+    "sr",
+    "role",
+    "createdAt",
+    "ownerUids",
+    "state"
+   ]
+  },
+  {
+   "name": "check-id called before signup",
+   "ok": true
+  },
+  {
+   "name": "password not in localStorage",
+   "ok": true
+  },
+  {
+   "name": "BAD_LOGIN message",
+   "ok": true,
+   "info": "아이디나 비밀번호가 맞지 않아요"
+  },
+  {
+   "name": "LOCKED message",
+   "ok": true,
+   "info": "여러 번 틀려서 10분 동안 잠겼어요. 잠시 후 다시 해 주세요"
+  },
+  {
+   "name": "login on 2nd context",
+   "ok": true,
+   "info": {
+    "screen": "home",
+    "me": "kimbok",
+    "ses": {
+     "acct": "kimbok",
+     "role": "mentee",
+     "uid": "acct:kimbok",
+     "provider": "password"
+    }
+   }
+  },
+  {
+   "name": "session restore after reload (claims.acct)",
+   "ok": true,
+   "info": {
+    "screen": "home",
+    "me": "kimbok",
+    "ses": {
+     "acct": "kimbok",
+     "role": "mentee",
+     "uid": "acct:kimbok",
+     "provider": "password"
+    }
+   }
+  },
+  {
+   "name": "friend signup step 2 (id available)",
+   "ok": true,
+   "info": "재학증명서를 올렸어요"
+  },
+  {
+   "name": "friend signup → tpending",
+   "ok": true,
+   "info": {
+    "screen": "tpending",
+    "me": "minji01",
+    "ses": {
+     "acct": "minji01",
+     "role": "mentor",
+     "uid": "acct:minji01",
+     "provider": "password"
+    }
+   }
+  },
+  {
+   "name": "profile has only public fields + approved:false",
+   "ok": true,
+   "info": {
+    "name": "김민지",
+    "school": "경희대학교",
+    "major": "산업경영공학과",
+    "grade": "3학년",
+    "age": 22,
+    "gender": "여",
+    "dong": "영통동",
+    "road": "경기 수원시 영통구 청명로 21",
+    "rad": 3,
+    "intro": "천천히 알려드릴게요 <b>굵게</b>",
+    "topics": [
+     "taxi",
+     "kiosk"
+    ],
+    "wdays": [
+     "월",
+     "화",
+     "수",
+     "목",
+     "금",
+     "토",
+     "일"
+    ],
+    "times": [
+     "14:00"
+    ],
+    "approved": false,
+    "acct": "minji01",
+    "updatedAt": 1795687316236
+   }
+  },
+  {
+   "name": "admin.html redirects to index.html?app=admin",
+   "ok": true,
+   "info": "http://localhost:8765/index.html?app=admin"
+  },
+  {
+   "name": "admin app refuses non-admin",
+   "ok": true,
+   "info": "운영자 계정이 아니에요"
+  },
+  {
+   "name": "admin login → console",
+   "ok": true,
+   "info": {
+    "screen": "admin",
+    "me": "opsadmin",
+    "ses": {
+     "acct": "opsadmin",
+     "role": "admin",
+     "uid": "acct:opsadmin",
+     "provider": "password"
+    }
+   }
+  },
+  {
+   "name": "approve writes profile+account approved",
+   "ok": true
+  },
+  {
+   "name": "friend recheck → thome",
+   "ok": true,
+   "info": {
+    "screen": "thome",
+    "me": "minji01",
+    "ses": {
+     "acct": "minji01",
+     "role": "mentor",
+     "uid": "acct:minji01",
+     "provider": "password"
+    }
+   }
+  },
+  {
+   "name": "mentee sees approved friend in list",
+   "ok": true
+  },
+  {
+   "name": "friend intro HTML neutralised",
+   "ok": true
+  },
+  {
+   "name": "request created in Firestore (wait)",
+   "ok": true,
+   "info": {
+    "rid": "rmwxdvk1a2rhk",
+    "to": "minji01",
+    "from": "kimbok",
+    "payerAcct": "kimbok",
+    "amount": 20000,
+    "tid": "acc-minji01",
+    "who": "김복순",
+    "age": 74,
+    "area": "영통동",
+    "dist": 0,
+    "topics": [
+     "taxi"
+    ],
+    "memo": "",
+    "day": 20784,
+    "time": "10:00",
+    "dur": 60,
+    "place": "우리 집으로 와주세요",
+    "pk": "home",
+    "payer": "본인 결제",
+    "st": "wait",
+    "created": 1795687335982,
+    "updated": 1795687335982
+   }
+  },
+  {
+   "name": "friend accept → st ok",
+   "ok": true
+  },
+  {
+   "name": "lesson paid via /pay/confirm → done",
+   "ok": true,
+   "info": {
+    "s": {
+     "screen": "done",
+     "me": "kimbok",
+     "ses": {
+      "acct": "kimbok",
+      "role": "mentee",
+      "uid": "acct:kimbok",
+      "provider": "password"
+     }
+    },
+    "paid": true,
+    "url": "http://localhost:8765/index.html",
+    "calls": [
+     "/auth/login",
+     "/auth/login",
+     "/pay/confirm"
+    ]
+   }
+  },
+  {
+   "name": "client never wrote paid fields",
+   "ok": true
+  },
+  {
+   "name": "no direct Toss API call from browser",
+   "ok": true
+  },
+  {
+   "name": "friend sees confirmed (paid)",
+   "ok": true
+  },
+  {
+   "name": "outing app created (no amount/status/paid from client)",
+   "ok": true,
+   "info": {
+    "oid": "o1",
+    "acct": "kimbok",
+    "name": "김복순",
+    "dong": "영통동",
+    "levels": {
+     "kiosk": "help",
+     "taxi": "new",
+     "kakao": "help"
+    },
+    "score": 2,
+    "companions": [
+     {
+      "name": "김철수",
+      "rel": "배우자",
+      "phone": "010-5555-6666"
+     }
+    ],
+    "createdAt": 1795687391713
+   }
+  },
+  {
+   "name": "toss amount = 120000",
+   "ok": true
+  },
+  {
+   "name": "outing paid → o_done",
+   "ok": true,
+   "info": {
+    "s": {
+     "screen": "o_done",
+     "me": "kimbok",
+     "ses": {
+      "acct": "kimbok",
+      "role": "mentee",
+      "uid": "acct:kimbok",
+      "provider": "password"
+     }
+    },
+    "app1": {
+     "oid": "o1",
+     "acct": "kimbok",
+     "name": "김복순",
+     "dong": "영통동",
+     "levels": {
+      "kiosk": "help",
+      "taxi": "new",
+      "kakao": "help"
+     },
+     "score": 2,
+     "companions": [
+      {
+       "name": "김철수",
+       "rel": "배우자",
+       "phone": "010-5555-6666"
+      }
+     ],
+     "createdAt": 1795687391713,
+     "paid": true,
+     "paidAt": 1795687393734,
+     "orderId": "baep-mwxdwsey-qpo1ca",
+     "amount": 120000
+    }
+   }
+  },
+  {
+   "name": "AI assign writes team doc",
+   "ok": true,
+   "info": {
+    "oid": "o1",
+    "teamNo": 1,
+    "memberAccts": [
+     "kimbok"
+    ],
+    "friendAccts": [
+     "minji01"
+    ],
+    "members": [
+     {
+      "acct": "kimbok",
+      "name": "김복순",
+      "levels": {
+       "kiosk": "help",
+       "taxi": "new",
+       "kakao": "help"
+      }
+     },
+     {
+      "acct": "kimbok",
+      "name": "김철수",
+      "levels": {
+       "kiosk": "help",
+       "taxi": "new",
+       "kakao": "help"
+      },
+      "companion": true,
+      "rel": "배우자"
+     }
+    ],
+    "friends": [
+     {
+      "acct": "minji01",
+      "name": "김민지",
+      "helps": [
+       "o1_kimbok",
+       "o1_kimbokc"
+      ]
+     }
+    ],
+    "warn": false,
+    "confirmed": false,
+    "updatedAt": 1795687431751
+   }
+  },
+  {
+   "name": "confirm → status confirmed + sms + team confirmed",
+   "ok": true
+  },
+  {
+   "name": "member sees confirmed team",
+   "ok": true
+  },
+  {
+   "name": "friend home shows outing assignment",
+   "ok": true
+  },
+  {
+   "name": "profile edit updates baep_profiles",
+   "ok": true
+  },
+  {
+   "name": "withdraw → /auth/delete, signed out, docs gone",
+   "ok": true,
+   "info": {
+    "screen": "join",
+    "me": null,
+    "ses": {
+     "acct": null,
+     "role": null,
+     "uid": null,
+     "provider": null
+    }
+   }
+  }
+ ],
+ "errors": [],
+ "denied": []
+}

@@ -27,10 +27,12 @@
   const SV = {__sv:'ts'};
   class Snap{ constructor(path,data){ this.ref=new DocRef(path); this.id=path.split('/').pop(); this._d=data; this.exists=data!=null; } data(){ return this._d==null?undefined:JSON.parse(JSON.stringify(this._d)); } get(k){ return this._d?this._d[k]:undefined; } }
   function poll(fn, next, onErr){ let stop=false,last=null,t=null; const tick=async()=>{ if(stop) return; try{ const v=await fn(); const k=JSON.stringify(v.key); if(k!==last){ last=k; if(!stop) next(v.val); } t=setTimeout(tick,350); }catch(e){ if(!stop&&onErr) onErr(e); } }; tick(); return ()=>{stop=true;clearTimeout(t);}; }
+  const hasUndef=v=>v===undefined||(v&&typeof v==='object'&&Object.values(v).some(hasUndef));
+  const chk=(d)=>{ if(hasUndef(d)) return Promise.reject(err('invalid-argument','Unsupported field value: undefined')); return null; };
   class DocRef{ constructor(path){ this.path=path; this.id=path.split('/').pop(); }
     async get(){ const r = await call({op:'get',path:this.path}); return new Snap(this.path,r.data); }
-    set(d,o){ return call({op:'set',path:this.path,data:d,merge:!!(o&&o.merge)}).then(()=>{}); }
-    update(d){ return call({op:'update',path:this.path,data:d}).then(()=>{}); }
+    set(d,o){ const e=chk(d); if(e) return e; return call({op:'set',path:this.path,data:d,merge:!!(o&&o.merge)}).then(()=>{}); }
+    update(d){ const e=chk(d); if(e) return e; return call({op:'update',path:this.path,data:d}).then(()=>{}); }
     delete(){ return call({op:'delete',path:this.path}).then(()=>{}); }
     onSnapshot(next,onErr){ return poll(async()=>{ const r=await call({op:'get',path:this.path}); return {key:r.data,val:new Snap(this.path,r.data)}; },next,onErr); } }
   class Query{ constructor(col,filters){ this.col=col; this.filters=filters||[]; }

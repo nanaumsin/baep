@@ -189,4 +189,4 @@ async function install(ctx, opts = {}) {
   await ctx.route(/^https:\/\/api\.tosspayments\.com\//, r => { B.tossDirect = (B.tossDirect || 0) + 1; r.abort(); });
 }
 function seedAdmin(id, pw) { B.secrets.set(id, { pw, role: 'admin', uids: ['acct:' + id] }); put('baep_accounts/' + id, { role: 'admin', createdAt: now(), ownerUids: ['acct:' + id] }); }
-module.exports = { B, install, seedAdmin, customToken, get, b64 };
+module.exports = { B, install, seedAdmin, customToken, get, put, b64 };

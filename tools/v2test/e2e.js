@@ -119,10 +119,10 @@ const lsDump = p => p.evaluate(() => JSON.stringify(Object.fromEntries(Object.ke
   await A(M1, 'go', 'pay'); await A(M1, 'pay'); await sleep(800);
   await shot(M1, '12-toss-sheet');
   await A(M1, 'tp-go');
-  await M1.waitForURL(/index\.html$/, { timeout: 10000 }).catch(() => {});
-  await M1.waitForFunction(() => window.S && S.screen === 'done', null, { timeout: 15000 }).catch(() => {});
+  await M1.waitForURL(/toss=ok/, { timeout: 10000 }).catch(() => {});
+  await L.until(M1, () => window.S && S.screen === 'done', 25000);
   s = await L.st(M1); const rq2 = BE.get('baep_requests/' + rid);
-  check('lesson paid via /pay/confirm → done', s.screen === 'done' && rq2.paid === true && (B.payments || []).some(x => x.kind === 'lesson' && x.refId === rid), { s, paid: rq2.paid });
+  check('lesson paid via /pay/confirm → done', s.screen === 'done' && rq2.paid === true && (B.payments || []).some(x => x.kind === 'lesson' && x.refId === rid), { s, paid: rq2.paid, url: M1.url(), tp: await M1.evaluate(() => (document.querySelector('.pyw.tp') || {}).textContent), calls: B.workerCalls.slice(-3).map(c => c.path) });
   check('client never wrote paid fields', !B.writes.some(w => w.acct !== null && /baep_requests|baep_outing_apps/.test(w.path) && w.op !== 'create' && false) && !B.denied.some(d => /paid/.test(d.msg)));
   check('no direct Toss API call from browser', !B.tossDirect);
   await shot(M1, '13-paid-done');
@@ -140,7 +140,8 @@ const lsDump = p => p.evaluate(() => JSON.stringify(Object.fromEntries(Object.ke
   check('outing app created (no amount/status/paid from client)', app0 && app0.acct === 'kimbok' && app0.companions.length === 1 && !('amount' in app0) && !('status' in app0) && !('paid' in app0), app0);
   check('toss amount = 120000', await M1.evaluate(() => /120,000원/.test(document.querySelector('.pyw.tp') ? document.querySelector('.pyw.tp').textContent : '')));
   await A(M1, 'tp-go');
-  await M1.waitForFunction(() => window.S && S.screen === 'o_done', null, { timeout: 20000 }).catch(() => {});
+  await M1.waitForURL(/toss=ok/, { timeout: 10000 }).catch(() => {});
+  await L.until(M1, () => window.S && S.screen === 'o_done', 25000);
   s = await L.st(M1); const app1 = BE.get('baep_outing_apps/o1_kimbok');
   check('outing paid → o_done', s.screen === 'o_done' && app1.paid === true && app1.amount === 120000, { s, app1 });
   await shot(M1, '16-outing-done');

@@ -1,0 +1,20 @@
+const L = require('./lib'); const { A, sleep, BE } = L; const B = BE.B;
+(async () => {
+  await L.start('/home/claude/BaepApp/web');
+  B.secrets.set('kimbok', { pw: 'secret1', role: 'mentee', uids: ['acct:kimbok'] });
+  const put=(p,d)=>B.docs.set(p,d);
+  put('baep_accounts/kimbok', { role: 'mentee', sr:{name:'김복순'}, createdAt: 1, ownerUids: ['acct:kimbok'] });
+  put('baep_profiles/minji01', { approved: true, acct:'minji01', name:'김민지', wdays:['월','화','수','목','금','토','일'], times:['10:00'], topics:['taxi'] });
+  put('baep_requests/rX', { rid:'rX', from:'kimbok', to:'minji01', payerAcct:'kimbok', amount:20000, dur:60, st:'ok', day:20500, time:'10:00', tid:'acc-minji01' });
+  const { p } = await L.ctx('dbg');
+  p.on('console', m => console.log('[console]', m.type(), m.text().slice(0,300)));
+  await p.goto(L.ROOT + '/index.html'); await sleep(800);
+  await A(p, 'spl-go'); await p.fill('#lg-id','kimbok'); await p.fill('#lg-pw','secret1'); await A(p,'login'); await sleep(1200);
+  await p.evaluate(()=>loadFriends(true)); await sleep(800);
+  await p.evaluate(()=>{S.tid='acc-minji01';S.req={rid:'rX',remote:true,st:'ok',amount:20000,tid:'acc-minji01',dur:60};S.accepted=true;S.day=S.day||TODAYN+1;S.slot='10:00';S.place='home';S.screen='pay';render()});
+  await A(p,'pay'); await sleep(800); await A(p,'tp-go');
+  await p.waitForURL(/toss=ok/,{timeout:10000}).catch(()=>{}); console.log('URL', p.url());
+  await L.until(p, () => window.S && S.screen === 'done', 15000);
+  console.log(await L.st(p), B.workerCalls.map(c=>c.path), B.docs.get('baep_requests/rX'));
+  await L.stop();
+})().catch(e => { console.error(e); L.stop(); });

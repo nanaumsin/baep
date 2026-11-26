@@ -1,0 +1,158 @@
+{
+ "results": [
+  {
+   "name": "demo baeum: enters home with 0 Firestore/worker calls",
+   "ok": true,
+   "info": {
+    "s": "home",
+    "n": {
+     "fs": 0,
+     "worker": 0,
+     "urls": []
+    }
+   }
+  },
+  {
+   "name": "demo friend: enters thome with 0 Firestore/worker calls",
+   "ok": true,
+   "info": {
+    "s": "thome",
+    "n": {
+     "fs": 0,
+     "worker": 0,
+     "urls": []
+    }
+   }
+  },
+  {
+   "name": "demo admin: enters admin with 0 Firestore/worker calls",
+   "ok": true,
+   "info": {
+    "s": "admin",
+    "n": {
+     "fs": 0,
+     "worker": 0,
+     "urls": []
+    }
+   }
+  },
+  {
+   "name": "live: html.baep-live",
+   "ok": true
+  },
+  {
+   "name": "live: no demo text/buttons on login",
+   "ok": true,
+   "info": "글자 크게\n배프\n\n배움을 함께하는 프렌드\n\n우리 동네 대학생이 어르신께\n스마트폰 쓰는 법을 1:1로 알려드려요\n\n카카오로 시작하기\n또는 아이디로 로그인\n아이디\n비밀번호\n로그인하기\n처음 오셨나요?\n회원가입\n#"
+  },
+  {
+   "name": "live: no operator entry in user app",
+   "ok": true
+  },
+  {
+   "name": "live: demo account baeum/1234 does not exist",
+   "ok": true,
+   "info": {
+    "screen": "join",
+    "me": null,
+    "ses": {
+     "acct": null,
+     "role": null,
+     "uid": null,
+     "provider": null
+    }
+   }
+  },
+  {
+   "name": "demo user app: no real operator login form",
+   "ok": true
+  },
+  {
+   "name": "android: app=admin refused",
+   "ok": true,
+   "info": {
+    "s": "splash",
+    "url": "http://localhost:8765/index.html"
+   }
+  },
+  {
+   "name": "kakao return with acct → home",
+   "ok": true,
+   "info": {
+    "s": {
+     "screen": "home",
+     "me": "kakao777",
+     "ses": {
+      "acct": "kakao777",
+      "role": "mentee",
+      "uid": "kakao:777",
+      "provider": "kakao"
+     }
+    },
+    "url": "http://localhost:8765/index.html"
+   }
+  },
+  {
+   "name": "kakao return without acct → pick role",
+   "ok": true,
+   "info": {
+    "screen": "pick",
+    "me": null,
+    "ses": {
+     "acct": null,
+     "role": null,
+     "uid": "kakao:888",
+     "provider": "kakao"
+    }
+   }
+  },
+  {
+   "name": "kakao signup via Bearer → home",
+   "ok": true,
+   "info": {
+    "s": {
+     "screen": "home",
+     "me": "kakao888",
+     "ses": {
+      "acct": "kakao888",
+      "role": "mentee",
+      "uid": "kakao:888",
+      "provider": "kakao"
+     }
+    },
+    "su": {
+     "id": "kakao888",
+     "role": "mentee",
+     "provider": "kakao",
+     "keys": [
+      "role",
+      "account"
+     ]
+    },
+    "toast": "가입했어요. 다음부터 '카카오로 시작하기'만 누르세요"
+   }
+  },
+  {
+   "name": "kakao signup: no client baep_users/baep_social writes",
+   "ok": true
+  },
+  {
+   "name": "?s=home preview renders",
+   "ok": true,
+   "info": {
+    "fs": 0,
+    "worker": 0,
+    "urls": []
+   }
+  },
+  {
+   "name": "board.html renders",
+   "ok": true
+  },
+  {
+   "name": "android back hook #app [data-a=back] exists",
+   "ok": true
+  }
+ ],
+ "errors": []
+}
