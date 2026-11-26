@@ -1,83 +1,294 @@
 rules_version = '2';
 
 /* =====================================================================
-   배프 Firestore 보안 규칙
+   배프 Firestore 보안 규칙 v2  (약속 문서: docs/ARCH-v2.md §3)
 
    붙여넣는 법
-   1. https://console.firebase.google.com → 배프 프로젝트
+   1. https://console.firebase.google.com → 배프 프로젝트(baep-f3465)
    2. 왼쪽 메뉴 Firestore Database → 위쪽 "규칙" 탭
    3. 안에 있던 내용을 전부 지우고, 이 파일 내용을 통째로 붙여넣기
    4. "게시" 누르기 (1분쯤 뒤부터 적용돼요)
+   5. 게시한 뒤 server/rules-checklist.md 의 표대로 몇 가지를 직접 확인해 보세요.
 
-   로그인 방식
-   - 카카오·네이버로 로그인하면: uid 가 "kakao:12345" / "naver:abcd" 모양이에요 (서버가 만든 커스텀 토큰)
-   - 예전 아이디/비밀번호(데모) 계정은: 앱이 켜질 때 "익명 로그인"을 해서 request.auth 가 생겨요
-   → 그래서 아래 규칙은 "어떤 방식으로든 Firebase 에 로그인돼 있어야" 읽고 쓸 수 있어요.
-     (Firebase 콘솔 → Authentication → 로그인 방법 → "익명" 을 꼭 켜 주세요!)
+   누가 누구인지 (로그인 토큰)
+   - 아이디/비밀번호·카카오·네이버 로그인은 모두 서버(워커)가 만든 토큰이에요.
+     토큰 안에 acct(내 계정 아이디)와 role('mentee'|'mentor'|'admin')이 들어 있어요.
+   - 익명 로그인(로그인 전 화면)은 acct 가 없어요 → 공개 정보(승인된 프렌드, 나들이 목록)만 읽을 수 있어요.
+     (Firebase 콘솔 → Authentication → 로그인 방법 → "익명" 은 계속 켜 두세요)
+   - role:'admin' 은 서버의 ADMIN_IDS 에 적힌 계정이 아이디/비밀번호로 로그인했을 때만 생겨요.
 
-   앱이 쓰는 컬렉션 (index.html 기준)
-   - baep_accounts/<아이디>   : 예전 아이디/비밀번호 계정 + 진행 상태. 로그인할 때 읽고, 관리자 승인 목록에서
-                                where('role','==','mentor').where('approved','==',...) 로 검색해요.
-   - baep_requests/<요청번호> : 수업 요청. 배움님이 만들고(set) 프렌드가 수락(update),
-                                where('to','==',프렌드아이디) 로 실시간 구독(onSnapshot)해요.
-   - baep_users/<uid>         : (새로 추가) 간편로그인 프로필 — 역할, 이름, 전화, 연결된 예전 아이디
+   중요한 약속
+   - 서버(워커)는 서비스 계정으로 쓰기 때문에 이 규칙을 거치지 않아요.
+     그래서 "서버만" 이라고 적힌 곳은 앱에서 절대 못 써요(전부 false).
+   - 비밀번호 해시는 baep_secrets 에만 있고, 이 컬렉션은 누구도 못 읽어요.
+   - 결제 표시(paid, paidAt, orderId, payLock…)는 결제 서버만 적어요.
+   - 앱에서 문서를 고칠 때는 set() 통째 덮어쓰기 대신 update() 또는 set(…, {merge:true}) 를 써 주세요.
+     (서버가 적은 필드를 지우는 것도 "고치기"로 봐서 거절돼요)
+   - 검색(where)은 규칙이 "전부 내 것" 이라고 증명할 수 있는 모양으로만 돼요.
+     예) baep_requests 는 where('to','==',내아이디) / where('from','==',내아이디) / where('payerAcct','==',내아이디)
    ===================================================================== */
 
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // 카카오·네이버 로그인이든 익명 로그인이든, 로그인만 돼 있으면 true
+    /* ---------------- 공통 도우미 ---------------- */
+
+    // 어떤 방식으로든(익명 포함) 로그인돼 있으면 true
     function signedIn() {
       return request.auth != null;
     }
-
-    // 문서 하나가 너무 커지지 않게 (Firestore 한도는 1MB, 여기선 넉넉히 필드 200개까지)
-    function sane() {
-      return request.resource.data.size() <= 200;
+    // 내 계정 아이디 (토큰의 acct). 익명·가입 전이면 null
+    function me() {
+      return request.auth != null ? request.auth.token.get('acct', null) : null;
+    }
+    // 가입을 마친 배프 회원인지 (acct 가 있는 토큰)
+    function member() {
+      return me() is string && me().size() > 0;
+    }
+    function myRole() {
+      return request.auth != null ? request.auth.token.get('role', '') : '';
+    }
+    function isAdmin() {
+      return member() && myRole() == 'admin';
+    }
+    // 이번 쓰기로 바뀌는(추가·변경·삭제) 필드들
+    function changed() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+    function newData() {
+      return request.resource.data;
+    }
+    // 문서 크기 제한 (필드 수)
+    function fieldsUnder(n) {
+      return request.resource.data.size() <= n;
+    }
+    // (있다면) 글자이고 n자 이하
+    function optStr(d, k, n) {
+      return !(k in d) || (d[k] is string && d[k].size() <= n);
+    }
+    function optList(d, k, n) {
+      return !(k in d) || (d[k] is list && d[k].size() <= n);
+    }
+    // 결제 서버만 쓰는 필드
+    function payKeys() {
+      return ['paid', 'paidAt', 'orderId', 'payLock', 'payLockAt'];
+    }
+    // 이미 결제된 문서인지
+    function isPaid() {
+      return resource.data.get('paid', false) == true;
     }
 
-    /* ---------- 간편로그인 프로필: 본인만 ----------
-       baep_users/<uid> 는 그 uid 로 로그인한 사람만 읽고/쓰고/지울 수 있어요.
-       (탈퇴할 때 앱이 직접 이 문서를 지워요) */
+    /* ---------- 비밀번호 보관함: 아무도 못 읽고 못 써요 (서버만) ---------- */
+    match /baep_secrets/{id} {
+      allow read, write: if false;
+    }
+
+    /* ---------- 간편로그인 연결표 baep_users/<uid> ----------
+       {acct, role, provider, createdAt} — 서버가 가입 때 만들어요. 본인 uid 만 읽기. */
     match /baep_users/{uid} {
-      allow read, delete: if signedIn() && request.auth.uid == uid;
-      allow create, update: if signedIn() && request.auth.uid == uid && sane();
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
     }
 
-    /* ---------- 예전 아이디/비밀번호 계정 ----------
-       지금 앱은 "아이디로 남의 계정 문서를 찾아서" 로그인하고, 관리자 화면에서 프렌드 지원서를 승인해요.
-       그래서 로그인한 사람이면 누구나 읽기/쓰기가 돼요 (시연용 프로토타입 수준).
-       나중에 꼭 조이기:
-       - 비밀번호 해시(pw)가 담겨 있어서 아무나 읽을 수 있으면 안 좋아요 → 로그인은 간편로그인으로 옮기고,
-         문서 주인 uid 를 필드(ownerUid)로 저장해서 "request.auth.uid == resource.data.ownerUid" 일 때만 쓰기 허용
-       - approved(승인) 필드는 관리자만 바꾸게 (관리자 uid 목록이나 커스텀 클레임 role=='admin' 으로) */
-    match /baep_accounts/{accountId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn() && accountId.size() <= 64 && sane();
-      allow delete: if signedIn();
+    /* ---------- 계정 baep_accounts/<아이디> ----------
+       읽기: 본인 · 운영자
+       만들기·지우기: 서버만 (가입·탈퇴 주소)
+       고치기: 본인은 role, approved, createdAt, ownerUids 를 못 바꿔요
+               운영자는 approved(프렌드 승인)만 바꿔요 */
+    match /baep_accounts/{id} {
+      allow get, list: if (member() && me() == id) || isAdmin();
+      allow create, delete: if false;
+      allow update: if
+        (member() && me() == id
+          && !changed().hasAny(['role', 'approved', 'createdAt', 'ownerUids'])
+          && fieldsUnder(300))
+        || (isAdmin()
+          && changed().hasOnly(['approved'])
+          && newData().approved is bool);
     }
 
-    /* ---------- 수업 요청 ----------
-       배움님이 요청을 만들고, 프렌드가 수락/거절하고, 결제되면 상태가 바뀌어요. 둘 다 같은 문서를 고쳐요.
-       나중에 꼭 조이기:
-       - 요청을 만들 때 보낸 사람 uid(fromUid)와 받는 프렌드 uid(toUid)를 저장하고,
-         "그 두 사람만 읽기/고치기" 로 바꾸기
-       - st(상태)를 'paid' 로 바꾸는 건 결제 서버만 하도록 (지금은 앱이 직접 바꿔요) */
-    match /baep_requests/{requestId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn() && requestId.size() <= 128 && sane();
-      allow delete: if signedIn();
+    /* ---------- 공개 프렌드 프로필 baep_profiles/<아이디> ----------
+       읽기: 승인된(approved==true) 프로필은 로그인 전(익명) 포함 누구나
+             승인 전 프로필은 본인 · 운영자
+             → 목록은 where('approved','==',true) 로 검색해요. 운영자는 where('approved','==',false) 도 돼요.
+       만들기·지우기: 서버만
+       고치기: 본인 — 공개 필드(아래 목록)와 updatedAt 만, approved·acct 는 못 바꿔요
+               운영자 — approved 만 */
+    function profileFields() {
+      return ['name', 'school', 'major', 'grade', 'age', 'gender', 'dong', 'road', 'rad', 'intro', 'topics', 'wdays', 'times', 'updatedAt'];
+    }
+    match /baep_profiles/{id} {
+      allow get, list: if (signedIn() && resource.data.approved == true)
+        || (member() && me() == id)
+        || isAdmin();
+      allow create, delete: if false;
+      allow update: if
+        (member() && me() == id
+          && changed().hasOnly(profileFields())
+          && optStr(newData(), 'intro', 2000)
+          && optList(newData(), 'topics', 50)
+          && optList(newData(), 'wdays', 7)
+          && optList(newData(), 'times', 50))
+        || (isAdmin()
+          && changed().hasOnly(['approved'])
+          && newData().approved is bool);
     }
 
-    /* ---------- 새 컬렉션을 추가할 때 ----------
-       아래 "나머지 전부 금지" 때문에, 새 컬렉션(예: 나들이 baep_outings)을 쓰려면 여기에 블록을 꼭 추가해야 해요.
-       예)
-       match /baep_outings/{id} {
-         allow read, write: if signedIn();
-       }
-    */
+    /* ---------- 수업 요청 baep_requests/<요청번호> ----------
+       읽기: 보낸 배움님(from) · 받은 프렌드(to) · 대신 결제하는 자녀(payerAcct) · 운영자
+       만들기: 배움님(role mentee)만, from 은 나, st 는 'wait', 결제 필드 없음,
+               amount 는 요금표 금액(60분 2만·3만 / 90분 2.5만·4만), 받는 프렌드는 승인된 프렌드
+       고치기:
+         · 받은 프렌드: st·why·updated·fdone 만. st 는 wait→ok(수락) / wait→no(거절) /
+                        ok→cancel(결제 안 된 채 기한이 지남)만
+         · 보낸 배움님: 결제 전에만. st→'cancel'(취소),
+                        일정(day·time·place·pk·memo)은 아직 수락 전(wait)일 때만,
+                        열어둔 시간 바로 예약: st wait→ok + inst:true (프렌드 프로필의 요일·시간과 맞을 때만)
+         · 결제 필드(paid…)는 아무도 (결제 서버만)
+       지우기: 아무도 (탈퇴 때 서버가 정리) */
+    // dur 은 숫자(60) 또는 글자('60') 둘 다 받아요
+    function durIs(d, n) {
+      return d.dur == n || d.dur == string(n);
+    }
+    function lessonAmountOk(d) {
+      return d.amount is int
+        && ((durIs(d, 60) && d.amount in [20000, 30000])
+          || (durIs(d, 90) && d.amount in [25000, 40000]));
+    }
+    function approvedFriend(acct) {
+      return acct is string && acct.size() > 0 && acct.size() <= 64
+        && exists(/databases/$(database)/documents/baep_profiles/$(acct))
+        && get(/databases/$(database)/documents/baep_profiles/$(acct)).data.approved == true;
+    }
+    // 열어둔 시간인지: 요청의 day(1970-01-01부터 센 날 수) 요일과 time 이 프렌드 프로필 wdays·times 에 있어요
+    // (1970-01-01 은 목요일 → (day + 4) % 7 이 0=일 … 6=토)
+    function openSlot(d) {
+      let p = get(/databases/$(database)/documents/baep_profiles/$(d.to)).data;
+      return p.approved == true
+        && d.day is int && d.day >= 1000
+        && d.time is string
+        && p.times is list && p.times.hasAny([d.time])
+        && p.wdays is list && p.wdays.hasAny([['일', '월', '화', '수', '목', '금', '토'][(d.day + 4) % 7]]);
+    }
+    match /baep_requests/{rid} {
+      allow get, list: if (member() && (resource.data.from == me()
+          || resource.data.to == me()
+          || resource.data.payerAcct == me()))
+        || isAdmin();
 
-    /* ---------- 나머지 전부 금지 ---------- */
+      allow create: if member() && myRole() == 'mentee'
+        && rid.size() <= 64
+        && newData().from == me()
+        && newData().st == 'wait'
+        && !newData().keys().hasAny(payKeys())
+        && newData().to is string && newData().to != me() && approvedFriend(newData().to)
+        && lessonAmountOk(newData())
+        && newData().get('rid', rid) == rid
+        && (!('payerAcct' in newData()) || (newData().payerAcct is string && newData().payerAcct.size() <= 64))
+        && optStr(newData(), 'memo', 1000)
+        && optStr(newData(), 'who', 100)
+        && optList(newData(), 'topics', 20)
+        && fieldsUnder(40);
+
+      allow update: if member() && !changed().hasAny(payKeys()) && (
+        // 받은 프렌드
+        (resource.data.to == me()
+          && changed().hasOnly(['st', 'why', 'updated', 'fdone'])
+          && optStr(newData(), 'why', 500)
+          && (newData().st == resource.data.st
+            || (resource.data.st == 'wait' && newData().st in ['ok', 'no'])
+            || (resource.data.st == 'ok' && newData().st == 'cancel' && !isPaid())))
+        ||
+        // 보낸 배움님 (결제 전에만)
+        (resource.data.from == me() && !isPaid()
+          && changed().hasOnly(['st', 'inst', 'day', 'time', 'place', 'pk', 'memo', 'updated', 'payerAcct', 'payer'])
+          && optStr(newData(), 'memo', 1000)
+          && (!('payerAcct' in newData()) || newData().payerAcct is string)
+          && (!changed().hasAny(['day', 'time', 'place', 'pk']) || resource.data.st == 'wait')
+          && (newData().st == resource.data.st
+            || (resource.data.st in ['wait', 'ok'] && newData().st == 'cancel')
+            || (resource.data.st == 'wait' && newData().st == 'ok' && newData().get('inst', false) == true && openSlot(newData()))))
+      );
+
+      allow delete: if false;
+    }
+
+    /* ---------- 결제 기록 baep_payments/<주문번호> ----------
+       {acct, kind, refId, amount, method, approvedAt, status, receipt, paymentKey, createdAt}
+       읽기: 결제한 본인(acct) · 운영자 → 내 결제 목록은 where('acct','==',내아이디)
+       쓰기: 결제 서버만 (전자상거래법상 5년 보관) */
+    match /baep_payments/{orderId} {
+      allow get, list: if (member() && resource.data.acct == me()) || isAdmin();
+      allow write: if false;
+    }
+
+    /* ---------- 나들이 일정 baep_outings/<나들이번호> ----------
+       읽기: 누구나(익명 로그인 포함) · 쓰기: 운영자만 */
+    match /baep_outings/{oid} {
+      allow get, list: if signedIn();
+      allow create, update: if isAdmin() && fieldsUnder(100);
+      allow delete: if isAdmin();
+    }
+
+    /* ---------- 나들이 신청 baep_outing_apps/<나들이번호>_<내아이디> ----------
+       읽기: 신청한 본인 · 운영자 · 이 신청자가 배정된 팀의 프렌드
+             (프렌드는 검색 대신 팀 문서의 memberAccts 로 문서 번호(<oid>_<acct>)를 만들어 하나씩 읽어요)
+       만들기·고치기: 본인(acct==나). 단 결제 필드·amount·team·status 는 못 써요.
+                     결제한 뒤에는 동반자(companions·comp)도 못 바꿔요(금액이 달라지니까요).
+       운영자: team, status 만 고치기
+       지우기: 본인(결제 전에만) */
+    function outingServerKeys() {
+      return ['paid', 'paidAt', 'orderId', 'payLock', 'payLockAt', 'amount', 'team', 'status'];
+    }
+    // 팀 문서 번호: team 이 글자면 그대로('o1_1'), 숫자면 <oid>_<숫자>
+    function teamDocOf(d) {
+      return d.team is string ? d.team : d.oid + '_' + string(d.team);
+    }
+    match /baep_outing_apps/{appId} {
+      allow get, list: if (member() && resource.data.acct == me())
+        || isAdmin()
+        || (member() && 'team' in resource.data && resource.data.team != null
+          && me() in get(/databases/$(database)/documents/baep_outing_teams/$(teamDocOf(resource.data))).data.friendAccts);
+
+      allow create: if member()
+        && newData().acct == me()
+        && newData().oid is string && newData().oid.size() > 0 && newData().oid.size() <= 64
+        && appId == newData().oid + '_' + me()
+        && !newData().keys().hasAny(outingServerKeys())
+        && optList(newData(), 'companions', 3)
+        && fieldsUnder(40);
+
+      allow update: if
+        (member() && resource.data.acct == me()
+          && !changed().hasAny(outingServerKeys().concat(['acct', 'oid']))
+          && (!isPaid() || !changed().hasAny(['companions', 'comp']))
+          && optList(newData(), 'companions', 3)
+          && fieldsUnder(40))
+        || (isAdmin() && changed().hasOnly(['team', 'status']));
+
+      allow delete: if member() && resource.data.acct == me() && !isPaid();
+    }
+
+    /* ---------- 나들이 팀 baep_outing_teams/<나들이번호>_<팀번호> ----------
+       {oid, memberAccts:[배움님 아이디…], friendAccts:[프렌드 아이디…], …}
+       읽기: 운영자 · 팀에 들어간 배움님·프렌드
+             → where('memberAccts','array-contains',내아이디) / where('friendAccts','array-contains',내아이디)
+       쓰기: 운영자만 */
+    match /baep_outing_teams/{teamId} {
+      allow get, list: if isAdmin()
+        || (member() && (me() in resource.data.memberAccts
+          || me() in resource.data.friendAccts));
+      allow write: if isAdmin();
+    }
+
+    /* ---------- 문자 기록 baep_sms/<번호> (실제 발송 아님) ----------
+       운영자만 읽고 써요 */
+    match /baep_sms/{id} {
+      allow read, write: if isAdmin();
+    }
+
+    /* ---------- 나머지 전부 금지 ----------
+       새 컬렉션을 쓰려면 위에 블록을 꼭 추가해야 해요. */
     match /{document=**} {
       allow read, write: if false;
     }
