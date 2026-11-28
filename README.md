@@ -11,7 +11,7 @@
 
 ## 새로 추가된 것 (2026-11-25)
 
-- `web/feat-auth.js` — 카카오·네이버 간편로그인, 회원 탈퇴. 설정: `web/auth-config.js`
+- `web/feat-auth.js` — 카카오 간편로그인, 회원 탈퇴. 설정: `web/auth-config.js`
 - `web/feat-outing.js` — 나들이 (목록·신청·AI 팀 배정·운영자 확정·문자). 가격 등은 파일 맨 위 숫자만 바꾸면 돼요
 - `web/privacy.html` — 개인정보처리방침 (노란 칸 채우기)
 - `web/delete-account.html` — 계정 삭제 안내 (플레이스토어용)

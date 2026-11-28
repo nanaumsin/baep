@@ -1,0 +1,56 @@
+# 안드로이드 APK 자동 빌드
+# main 에 앱(app/)이나 화면(web/) 파일이 바뀌면 깃허브가 테스트용 APK 를 만들어
+# Releases 의 "apk-latest" 에 올려요. (Actions 탭 → 이 작업 → Run workflow 로 직접 돌릴 수도 있어요)
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'web/**'
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'gradle.properties'
+      - 'gradle/**'
+      - '.github/workflows/android-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Build debug APK
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk baep-debug.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: baep-debug-apk
+          path: baep-debug.apk
+
+      - name: Publish to release apk-latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete apk-latest --yes --cleanup-tag || true
+          gh release create apk-latest baep-debug.apk \
+            --title "배프 테스트용 APK (자동 빌드)" \
+            --notes "커밋 ${{ github.sha }} 에서 자동으로 만든 테스트용(디버그) APK 예요. 휴대폰에 직접 설치할 때 '출처를 알 수 없는 앱 설치'를 허용해야 해요." \
+            --prerelease
